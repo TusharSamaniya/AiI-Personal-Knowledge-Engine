@@ -6,3 +6,4 @@ alembic
 python-dotenv
 celery
 redis
+python-multipart
