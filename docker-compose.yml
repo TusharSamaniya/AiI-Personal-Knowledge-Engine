@@ -13,10 +13,12 @@ services:
       - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - ./backend/.env
 
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
+  # frontend:
+  #   build: ./frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
