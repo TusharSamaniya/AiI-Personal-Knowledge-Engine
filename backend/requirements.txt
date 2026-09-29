@@ -7,3 +7,4 @@ python-dotenv
 celery
 redis
 python-multipart
+flake8
