@@ -4,3 +4,5 @@ sqlalchemy
 psycopg2-binary
 alembic
 python-dotenv
+celery
+redis

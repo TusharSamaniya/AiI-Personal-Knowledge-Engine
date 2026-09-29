@@ -16,6 +16,17 @@ services:
     env_file:
       - ./backend/.env
 
+  worker:
+    build: ./backend
+    command: celery -A app.celery_worker.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+      - backend
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   # frontend:
   #   build: ./frontend
   #   ports:
