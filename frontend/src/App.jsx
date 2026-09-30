@@ -3,7 +3,8 @@ import { AuthProvider } from './context/AuthContext';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import ProtectedRoute from './components/ProtectedRoute'; // <-- NEW IMPORT
+import AuthCallback from './pages/AuthCallback';
+import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
   return (
@@ -13,8 +14,7 @@ function App() {
           <Route path="/" element={<Navigate to="/login" />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          
-          {/* Dashboard is now protected! */}
+          <Route path="/auth/callback" element={<AuthCallback />} />
           <Route 
             path="/dashboard" 
             element={

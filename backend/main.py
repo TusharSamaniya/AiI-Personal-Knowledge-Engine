@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Project
@@ -10,6 +11,7 @@ import os
 from dotenv import load_dotenv
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from fastapi.middleware.cors import CORSMiddleware
+
 
 load_dotenv()
 
@@ -68,17 +70,24 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
+    
     user_info = token.get("userinfo")
     email = user_info["email"]
     name = user_info.get("name")
+    
     user = db.query(User).filter(User.email == email).first()
     if not user:
         user = User(email=email, password_hash=None, name=name, oauth_provider="google")
         db.add(user)
         db.commit()
         db.refresh(user)
+    
     access_token = create_access_token({"sub": user.email})
-    return {"access_token": access_token, "token_type": "bearer", "name": user.name}
+    
+    # NEW: Redirect to frontend with token in URL
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    return RedirectResponse(url=f"{frontend_url}/auth/callback?token={access_token}")
+
 
 @app.get("/user/me")
 def get_me(current_user: User = Depends(get_current_user)):
