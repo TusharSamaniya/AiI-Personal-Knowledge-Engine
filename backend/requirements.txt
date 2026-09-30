@@ -8,3 +8,5 @@ celery
 redis
 python-multipart
 flake8
+passlib[bcrypt]
+python-jose[cryptography]
