@@ -9,11 +9,20 @@ from starlette.middleware.sessions import SessionMiddleware
 import os
 from dotenv import load_dotenv
 from app.auth import hash_password, verify_password, get_current_user, require_role
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super-secret-key-change-me")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # OAuth Setup
 oauth = OAuth()
