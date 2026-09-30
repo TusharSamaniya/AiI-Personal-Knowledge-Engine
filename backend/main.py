@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User
+from app.models import User, Project
 from app.auth import hash_password, verify_password, get_current_user
 from app.jwt_handler import create_access_token
 from authlib.integrations.starlette_client import OAuth
@@ -70,14 +70,14 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
     access_token = create_access_token({"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer", "name": user.name}
 
-# NEW ENDPOINTS
 @app.get("/user/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "email": current_user.email,
         "name": current_user.name,
-        "oauth_provider": current_user.oauth_provider
+        "oauth_provider": current_user.oauth_provider,
+        "active_project_id": current_user.active_project_id
     }
 
 @app.put("/user/update")
@@ -86,3 +86,70 @@ def update_user(name: str, current_user: User = Depends(get_current_user), db: S
     db.commit()
     db.refresh(current_user)
     return {"message": "Profile updated successfully", "new_name": current_user.name}
+
+# ==========================================
+# NEW: Project Management Endpoints
+# ==========================================
+
+@app.post("/projects/create")
+def create_project(
+    name: str,
+    description: str = "",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    new_project = Project(user_id=current_user.id, name=name, description=description)
+    db.add(new_project)
+    db.commit()
+    db.refresh(new_project)
+    return {"message": "Project created", "project_id": new_project.id, "name": new_project.name}
+
+@app.get("/projects/list")
+def list_projects(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    projects = db.query(Project).filter(Project.user_id == current_user.id).all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "is_active": (p.id == current_user.active_project_id)
+        }
+        for p in projects
+    ]
+
+@app.post("/projects/switch/{project_id}")
+def switch_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    current_user.active_project_id = project.id
+    db.commit()
+    return {"message": f"Switched to project '{project.name}'"}
+
+@app.delete("/projects/delete/{project_id}")
+def delete_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.active_project_id == project.id:
+        current_user.active_project_id = None
+    db.delete(project)
+    db.commit()
+    return {"message": f"Project '{project.name}' deleted"}

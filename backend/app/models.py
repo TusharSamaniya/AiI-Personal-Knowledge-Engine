@@ -9,7 +9,8 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=True)  # Changed to True
     name = Column(String)
-    oauth_provider = Column(String, nullable=True)  # NEW!
+    oauth_provider = Column(String, nullable=True)  
+    active_project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
 class Project(Base):
