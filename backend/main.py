@@ -1,27 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from app.database import SessionLocal
+from app.database import get_db
 from app.models import User
-from app.auth import hash_password, verify_password
+from app.auth import hash_password, verify_password, get_current_user
 from app.jwt_handler import create_access_token
 from authlib.integrations.starlette_client import OAuth
-from starlette.config import Config
+from starlette.middleware.sessions import SessionMiddleware
 import os
 from dotenv import load_dotenv
-from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="super-secret-key-change-me")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # OAuth Setup
 oauth = OAuth()
@@ -67,17 +58,31 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
-    
     user_info = token.get("userinfo")
     email = user_info["email"]
     name = user_info.get("name")
-    
     user = db.query(User).filter(User.email == email).first()
     if not user:
         user = User(email=email, password_hash=None, name=name, oauth_provider="google")
         db.add(user)
         db.commit()
         db.refresh(user)
-    
     access_token = create_access_token({"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer", "name": user.name}
+
+# NEW ENDPOINTS
+@app.get("/user/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "name": current_user.name,
+        "oauth_provider": current_user.oauth_provider
+    }
+
+@app.put("/user/update")
+def update_user(name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.name = name
+    db.commit()
+    db.refresh(current_user)
+    return {"message": "Profile updated successfully", "new_name": current_user.name}
