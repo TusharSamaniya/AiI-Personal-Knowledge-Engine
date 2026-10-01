@@ -30,3 +30,19 @@ class ChatHistory(Base):
     question = Column(Text)
     answer = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
+
+class File(Base):
+    __tablename__ = "files"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    name = Column(String, nullable=False)
+    file_type = Column(String)
+    status = Column(String, default="processing")
+    uploaded_at = Column(DateTime, server_default=func.now())
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    id = Column(Integer, primary_key=True)
+    file_id = Column(Integer, ForeignKey("files.id"))
+    text = Column(Text, nullable=False)
+    chunk_index = Column(Integer)
