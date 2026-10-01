@@ -37,6 +37,7 @@ class File(Base):
     project_id = Column(Integer, ForeignKey("projects.id"))
     name = Column(String, nullable=False)
     file_type = Column(String)
+    source_type = Column(String, default="file")
     status = Column(String, default="processing")
     uploaded_at = Column(DateTime, server_default=func.now())
 

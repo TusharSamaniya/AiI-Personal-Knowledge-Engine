@@ -4,12 +4,23 @@ from app.models import File, Chunk
 from app.parser import extract_text
 from app.chunker import chunk_text
 from app.vector_store import embed_and_store
+from app.extractors.youtube_extractor import extract_youtube_text
+from app.extractors.web_extractor import extract_web_text
 
 celery_app = Celery(
     "worker",
     broker="redis://redis:6379/0",
     backend="redis://redis:6379/0"
 )
+
+def get_text_from_source(file_record) -> str:
+    """Unified text extraction based on source type"""
+    if file_record.source_type == "youtube":
+        return extract_youtube_text(file_record.name)  # name = URL for URLs
+    elif file_record.source_type == "web":
+        return extract_web_text(file_record.name)  # name = URL for URLs
+    else:
+        return extract_text(f"uploads/{file_record.name}", file_record.file_type)
 
 @celery_app.task
 def ingest_file_task(file_id: int):
@@ -20,10 +31,12 @@ def ingest_file_task(file_id: int):
         if not file_record:
             return f"File with id {file_id} not found"
         
-        file_path = f"uploads/{file_record.name}"
-        print(f"[INGEST] Starting: {file_record.name} (type: {file_record.file_type})")
-        text = extract_text(file_path, file_record.file_type)
+        print(f"[INGEST] Starting: {file_record.name} (source: {file_record.source_type})")
+        text = get_text_from_source(file_record)
         print(f"[INGEST] Extracted {len(text)} characters")
+        
+        if not text or len(text.strip()) < 50:
+            raise ValueError("Extracted text is too short. Source may be empty or blocked.")
         
         chunks = chunk_text(text)
         print(f"[INGEST] Split into {len(chunks)} chunks")
@@ -31,9 +44,8 @@ def ingest_file_task(file_id: int):
         for i, chunk in enumerate(chunks):
             new_chunk = Chunk(file_id=file_record.id, text=chunk, chunk_index=i)
             db.add(new_chunk)
-            db.flush()  # Get the new_chunk.id BEFORE commit
+            db.flush()
             
-            # Embed and store in ChromaDB
             vector_id = embed_and_store(
                 project_id=file_record.project_id,
                 chunk_id=new_chunk.id,

@@ -177,9 +177,40 @@ def delete_project(
     return {"message": f"Project '{project.name}' deleted"}
 
 @app.post("/ingest/url")
-def ingest_url(url: str, current_user: User = Depends(get_current_user)):
-    # This is a temporary stub. Real logic comes in Task 2.
-    return {"message": f"Received URL: {url}. Processing will be added in Task 2."}
+def ingest_url(
+    url: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Check for active project
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 2. Detect source type
+    if "youtube.com" in url or "youtu.be" in url:
+        source_type = "youtube"
+    else:
+        source_type = "web"
+    
+    # 3. Create DB record (name = URL)
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=url,
+        file_type=source_type,
+        source_type=source_type,
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    
+    # 4. Send to Celery
+    ingest_file_task.delay(new_file.id)
+    
+    return {
+        "message": f"{source_type.capitalize()} URL received. Processing in background.",
+        "file_id": new_file.id
+    }
 
 # Re-add file upload endpoint (from Phase 1)
 storage = LocalStorage()

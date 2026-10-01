@@ -18,3 +18,5 @@ python-docx
 langchain-text-splitters
 openai
 chromadb
+youtube-transcript-api
+beautifulsoup4
