@@ -13,3 +13,6 @@ authlib
 httpx
 itsdangerous
 python-jose[cryptography]
+pdfplumber
+python-docx
+langchain-text-splitters
