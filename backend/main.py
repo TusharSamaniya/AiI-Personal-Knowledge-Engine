@@ -1,16 +1,17 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Project
-from app.auth import hash_password, verify_password, get_current_user
+from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token
+from app.storage import LocalStorage
+from app.celery_worker import dummy_ingestion_task
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from app.auth import hash_password, verify_password, get_current_user, require_role
-from fastapi.middleware.cors import CORSMiddleware
 
 
 load_dotenv()
@@ -172,3 +173,20 @@ def delete_project(
     db.delete(project)
     db.commit()
     return {"message": f"Project '{project.name}' deleted"}
+
+@app.post("/ingest/url")
+def ingest_url(url: str, current_user: User = Depends(get_current_user)):
+    # This is a temporary stub. Real logic comes in Task 2.
+    return {"message": f"Received URL: {url}. Processing will be added in Task 2."}
+
+# Re-add file upload endpoint (from Phase 1)
+storage = LocalStorage()
+
+@app.post("/upload")
+def upload_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    saved_path = storage.save_file(file)
+    dummy_ingestion_task.delay(file.filename)
+    return {"message": f"File saved at {saved_path} and sent to worker!"}
