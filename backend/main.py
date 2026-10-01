@@ -2,16 +2,18 @@ from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project
+from app.models import User, Project, File as FileModel
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token
 from app.storage import LocalStorage
-from app.celery_worker import dummy_ingestion_task
+from app.celery_worker import ingest_file_task
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
+
+
 
 
 load_dotenv()
@@ -185,8 +187,35 @@ storage = LocalStorage()
 @app.post("/upload")
 def upload_file(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
+    # 1. Make sure the user has an active project
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 2. Save the file to disk
     saved_path = storage.save_file(file)
-    dummy_ingestion_task.delay(file.filename)
-    return {"message": f"File saved at {saved_path} and sent to worker!"}
+    
+    # 3. Get the file extension (pdf, docx, txt, csv)
+    file_type = file.filename.split('.')[-1].lower()
+    
+    # 4. Create a database record for this file
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=file.filename,
+        file_type=file_type,
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    
+    # 5. Send the Celery task with the file ID (not filename!)
+    ingest_file_task.delay(new_file.id)
+    
+    return {
+        "message": "File uploaded and processing started.",
+        "file_id": new_file.id,
+        "name": new_file.name
+    }
