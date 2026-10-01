@@ -1,4 +1,4 @@
-from jose import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta
 
 SECRET_KEY = "mysecretkey"  # We will move this to .env later

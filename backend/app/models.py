@@ -46,3 +46,4 @@ class Chunk(Base):
     file_id = Column(Integer, ForeignKey("files.id"))
     text = Column(Text, nullable=False)
     chunk_index = Column(Integer)
+    vector_id = Column(String, nullable=True)  
