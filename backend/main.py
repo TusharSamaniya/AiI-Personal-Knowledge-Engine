@@ -298,35 +298,35 @@ def query(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # 2. Retrieve relevant chunks from ChromaDB
+    # 2. Retrieve relevant chunks with threshold filtering
     try:
-        results = search(project_id, question, top_k=5)
+        results = search(project_id, question, top_k=5, max_distance=2.0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
     
-    if not results["documents"]:
+    if not results:
         return {
             "answer": "No relevant content found in this project. Please upload some files first.",
             "sources": []
         }
     
-    # 3. Generate grounded answer using Groq LLM
+    # 3. Extract chunk texts for the LLM
+    context_chunks = [r["text"] for r in results]
+    
+    # 4. Generate grounded answer
     try:
-        answer = generate_answer(question, results["documents"])
+        answer = generate_answer(question, context_chunks)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM failed: {str(e)}")
     
-    # 4. Find the source file names for each retrieved chunk
+    # 5. Find source file names from the metadata
     sources = []
-    for vector_id in results["ids"]:
-        try:
-            chunk_id = int(vector_id.replace("chunk_", ""))
-            chunk = db.query(Chunk).filter(Chunk.id == chunk_id).first()
-            if chunk:
-                file_record = db.query(FileModel).filter(FileModel.id == chunk.file_id).first()
-                if file_record and file_record.name not in sources:
-                    sources.append(file_record.name)
-        except Exception:
+    for r in results:
+        file_id = r.get("file_id")
+        if not file_id:
             continue
+        file_record = db.query(FileModel).filter(FileModel.id == file_id).first()
+        if file_record and file_record.name not in sources:
+            sources.append(file_record.name)
     
     return {"answer": answer, "sources": sources}

@@ -51,11 +51,16 @@ def ingest_file_task(self, file_id: int):
             new_chunk = Chunk(file_id=file_record.id, text=chunk, chunk_index=i)
             db.add(new_chunk)
             db.flush()
-            
+    
             vector_id = embed_and_store(
                 project_id=file_record.project_id,
                 chunk_id=new_chunk.id,
-                text=chunk
+                text=chunk,
+                metadata={
+                    "file_id": file_record.id,
+                    "chunk_index": i,
+                    "source_type": file_record.source_type
+                }
             )
             new_chunk.vector_id = vector_id
             logger.info(f"[INGEST] Embedded chunk {i+1}/{len(chunks)}")
