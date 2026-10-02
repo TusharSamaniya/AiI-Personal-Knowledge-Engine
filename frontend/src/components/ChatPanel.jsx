@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import api from '../api/axios';
+
+const API_BASE = 'http://localhost:8000';
 
 export default function ChatPanel({ projectId }) {
   const [messages, setMessages] = useState([]);
@@ -7,7 +8,6 @@ export default function ChatPanel({ projectId }) {
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
@@ -17,24 +17,92 @@ export default function ChatPanel({ projectId }) {
     if (!input.trim() || loading) return;
 
     const question = input.trim();
-    const userMsg = { role: 'user', text: question };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [...prev, { role: 'user', text: question }]);
     setInput('');
     setLoading(true);
 
+    // Add an empty AI message that we'll fill in as tokens arrive
+    setMessages(prev => [...prev, { role: 'ai', text: '', sources: [], streaming: true }]);
+
     try {
-      const res = await api.post('/query', null, {
-        params: { project_id: projectId, question: question }
-      });
-      setMessages(prev => [
-        ...prev,
-        { role: 'ai', text: res.data.answer, sources: res.data.sources }
-      ]);
+      const token = localStorage.getItem('token');
+      const response = await fetch(
+        `${API_BASE}/query/stream?project_id=${projectId}&question=${encodeURIComponent(question)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'text/event-stream',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split on double newlines (SSE message separator)
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || ''; // Keep the last incomplete chunk
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6); // Remove "data: "
+          
+          try {
+            const parsed = JSON.parse(payload);
+
+            if (parsed.type === 'sources') {
+              setMessages(prev => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                updated[updated.length - 1] = { ...last, sources: parsed.sources };
+                return updated;
+              });
+            } else if (parsed.type === 'token') {
+              setMessages(prev => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                updated[updated.length - 1] = { ...last, text: last.text + parsed.text };
+                return updated;
+              });
+            } else if (parsed.type === 'done') {
+              setMessages(prev => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                updated[updated.length - 1] = { ...last, streaming: false };
+                return updated;
+              });
+            } else if (parsed.type === 'error') {
+              setMessages(prev => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                updated[updated.length - 1] = { ...last, text: '❌ ' + parsed.message, streaming: false };
+                return updated;
+              });
+            }
+          } catch (err) {
+            console.error('Failed to parse SSE line:', line, err);
+          }
+        }
+      }
     } catch (err) {
-      setMessages(prev => [
-        ...prev,
-        { role: 'ai', text: '❌ Error fetching answer. Please try again.' }
-      ]);
+      setMessages(prev => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        updated[updated.length - 1] = { ...last, text: '❌ Error fetching answer. Please try again.', streaming: false };
+        return updated;
+      });
     } finally {
       setLoading(false);
     }
@@ -51,20 +119,16 @@ export default function ChatPanel({ projectId }) {
         {messages.map((m, i) => (
           <div key={i} style={m.role === 'user' ? styles.userRow : styles.aiRow}>
             <div style={m.role === 'user' ? styles.userBubble : styles.aiBubble}>
-              <p style={styles.bubbleText}>{m.text}</p>
+              <p style={styles.bubbleText}>
+                {m.text}
+                {m.streaming && <span style={styles.cursor}>▋</span>}
+              </p>
               {m.sources && m.sources.length > 0 && (
                 <p style={styles.sources}>📄 Sources: {m.sources.join(', ')}</p>
               )}
             </div>
           </div>
         ))}
-        {loading && (
-          <div style={styles.aiRow}>
-            <div style={styles.aiBubble}>
-              <p style={styles.bubbleText}>⏳ Thinking...</p>
-            </div>
-          </div>
-        )}
         <div ref={bottomRef} />
       </div>
 
@@ -94,6 +158,7 @@ const styles = {
   userBubble: { backgroundColor: '#007bff', color: 'white', padding: '10px 15px', borderRadius: '15px 15px 0 15px', maxWidth: '70%' },
   aiBubble: { backgroundColor: '#e9ecef', color: '#333', padding: '10px 15px', borderRadius: '15px 15px 15px 0', maxWidth: '70%' },
   bubbleText: { margin: 0, whiteSpace: 'pre-wrap', wordWrap: 'break-word' },
+  cursor: { animation: 'blink 1s infinite', marginLeft: '2px' },
   sources: { margin: '8px 0 0 0', fontSize: '12px', color: '#666', fontStyle: 'italic' },
   inputBar: { display: 'flex', gap: '10px' },
   input: { flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #ccc', fontSize: '14px' },

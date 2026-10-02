@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from app.vector_store import search
-from app.llm_service import generate_answer
+from fastapi.responses import StreamingResponse
+from app.llm_service import generate_answer, stream_answer
+import json
 
 
 
@@ -330,3 +332,59 @@ def query(
             sources.append(file_record.name)
     
     return {"answer": answer, "sources": sources}
+
+@app.post("/query/stream")
+def query_stream(
+    project_id: int,
+    question: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 2. Retrieve relevant chunks (same as before)
+    try:
+        results = search(project_id, question, top_k=5, max_distance=2.0)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+    
+    if not results:
+        def empty_stream():
+            yield f"data: {json.dumps({'type': 'token', 'text': 'No relevant content found in this project.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return StreamingResponse(empty_stream(), media_type="text/event-stream")
+    
+    # 3. Get source file names
+    sources = []
+    for r in results:
+        file_id = r.get("file_id")
+        if not file_id:
+            continue
+        file_record = db.query(FileModel).filter(FileModel.id == file_id).first()
+        if file_record and file_record.name not in sources:
+            sources.append(file_record.name)
+    
+    context_chunks = [r["text"] for r in results]
+    
+    # 4. Stream the answer
+    def generate():
+        # Send sources first
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+        
+        # Stream each token
+        try:
+            for token in stream_answer(question, context_chunks):
+                yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        
+        # Signal completion
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
