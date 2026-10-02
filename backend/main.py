@@ -250,3 +250,33 @@ def upload_file(
         "file_id": new_file.id,
         "name": new_file.name
     }
+
+@app.get("/files/list/{project_id}")
+def list_files(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Security: only show files from projects owned by this user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    files = db.query(FileModel).filter(
+        FileModel.project_id == project_id
+    ).order_by(FileModel.uploaded_at.desc()).all()
+    
+    return [
+        {
+            "id": f.id,
+            "name": f.name,
+            "source_type": f.source_type,
+            "status": f.status,
+            "error_message": f.error_message,
+            "uploaded_at": f.uploaded_at
+        }
+        for f in files
+    ]

@@ -39,6 +39,7 @@ class File(Base):
     file_type = Column(String)
     source_type = Column(String, default="file")
     status = Column(String, default="processing")
+    error_message = Column(Text, nullable=True) 
     uploaded_at = Column(DateTime, server_default=func.now())
 
 class Chunk(Base):

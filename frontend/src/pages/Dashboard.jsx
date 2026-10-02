@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
@@ -10,13 +10,39 @@ export default function Dashboard() {
   const [projects, setProjects] = useState([]);
   const [newProjectName, setNewProjectName] = useState('');
 
-  // NEW: Upload states
+  // Upload states
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState('');
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
+  const [files, setFiles] = useState([]);
 
+  // 1. Derived value FIRST
+  const activeProject = projects.find(p => p.is_active);
+
+  // 2. Define fetchProjects
+  const fetchProjects = async () => {
+    try {
+      const res = await api.get('/projects/list');
+      setProjects(res.data);
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
+  // 3. Define fetchFiles wrapped in useCallback so it's stable
+  const fetchFiles = useCallback(async () => {
+    if (!activeProject) return;
+    try {
+      const res = await api.get(`/files/list/${activeProject.id}`);
+      setFiles(res.data);
+    } catch (err) {
+      console.log(err);
+    }
+  }, [activeProject?.id]);
+
+  // 4. useEffect #1: Load user + projects once on mount
   useEffect(() => {
     api.get('/user/me')
       .then(res => setUser(res.data))
@@ -27,11 +53,18 @@ export default function Dashboard() {
     fetchProjects();
   }, []);
 
-  const fetchProjects = () => {
-    api.get('/projects/list')
-      .then(res => setProjects(res.data))
-      .catch(err => console.log(err));
-  };
+  // 5. useEffect #2: Poll files every 5 seconds when active project changes
+  useEffect(() => {
+    if (!activeProject) {
+      setFiles([]);
+      return;
+    }
+    fetchFiles();
+    const interval = setInterval(fetchFiles, 5000);
+    return () => clearInterval(interval);
+  }, [activeProject?.id, fetchFiles]);
+
+  // ============ Handlers ============
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
@@ -56,7 +89,6 @@ export default function Dashboard() {
     }
   };
 
-  // NEW: File Upload Handler
   const handleFileUpload = async (e) => {
     e.preventDefault();
     if (!file) return;
@@ -78,6 +110,7 @@ export default function Dashboard() {
       setMessage('✅ File uploaded! Processing in background...');
       setFile(null);
       setProgress(0);
+      fetchFiles();  // Refresh file list immediately
     } catch (err) {
       setMessage('❌ Upload failed. Please try again.');
     } finally {
@@ -85,7 +118,6 @@ export default function Dashboard() {
     }
   };
 
-  // NEW: URL Upload Handler
   const handleUrlUpload = async (e) => {
     e.preventDefault();
     if (!url) return;
@@ -95,6 +127,7 @@ export default function Dashboard() {
       await api.post('/ingest/url', null, { params: { url } });
       setMessage('✅ URL received! Processing in background...');
       setUrl('');
+      fetchFiles();  // Refresh file list immediately
     } catch (err) {
       setMessage('❌ Invalid URL or processing failed.');
     } finally {
@@ -107,7 +140,7 @@ export default function Dashboard() {
     navigate('/login');
   };
 
-  const activeProject = projects.find(p => p.is_active);
+  // ============ Render ============
 
   return (
     <div style={styles.container}>
@@ -148,7 +181,6 @@ export default function Dashboard() {
           {projects.length === 0 && <p>No projects yet. Create one above!</p>}
         </ul>
 
-        {/* NEW: Upload Section (only shows if there is an active project) */}
         {activeProject ? (
           <div style={styles.uploadSection}>
             <h4>Add Content to "{activeProject.name}"</h4>
@@ -194,6 +226,34 @@ export default function Dashboard() {
             </form>
 
             {message && <p style={styles.message}>{message}</p>}
+
+            {/* Files List */}
+            <div style={styles.filesSection}>
+              <h4>Files in "{activeProject.name}"</h4>
+              {files.length === 0 && <p>No files yet. Upload one above!</p>}
+              <ul style={styles.list}>
+                {files.map((f) => (
+                  <li key={f.id} style={styles.fileItem}>
+                    <div>
+                      <strong>{f.name}</strong>
+                      <span style={styles.badge}>{f.source_type}</span>
+                    </div>
+                    <div style={styles.fileStatus}>
+                      {f.status === 'processed' && <span style={{ color: '#28a745' }}>✅ Processed</span>}
+                      {f.status === 'processing' && <span style={{ color: '#ffc107' }}>⏳ Processing...</span>}
+                      {f.status === 'failed' && (
+                        <div>
+                          <span style={{ color: '#dc3545' }}>❌ Failed</span>
+                          {f.error_message && (
+                            <p style={styles.errorText}>{f.error_message}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         ) : (
           <p style={styles.warning}>⚠️ Please select or create a project first.</p>
@@ -219,5 +279,10 @@ const styles = {
   dropZone: { border: '2px dashed #007bff', padding: '20px', borderRadius: '10px', textAlign: 'center', backgroundColor: 'white', marginBottom: '15px' },
   urlForm: { display: 'flex', gap: '10px' },
   message: { marginTop: '15px', color: '#333' },
-  warning: { marginTop: '20px', color: '#dc3545' }
+  warning: { marginTop: '20px', color: '#dc3545' },
+  filesSection: { marginTop: '30px', padding: '20px', backgroundColor: '#f8f9fa', borderRadius: '10px' },
+  fileItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'white', marginBottom: '8px', borderRadius: '5px', border: '1px solid #eee' },
+  fileStatus: { textAlign: 'right' },
+  badge: { marginLeft: '10px', padding: '2px 8px', backgroundColor: '#e0e0e0', borderRadius: '3px', fontSize: '12px' },
+  errorText: { margin: '5px 0 0 0', color: '#dc3545', fontSize: '12px', maxWidth: '400px' }
 };
