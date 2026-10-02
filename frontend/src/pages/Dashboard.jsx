@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
+import ChatPanel from '../components/ChatPanel';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -227,7 +228,7 @@ export default function Dashboard() {
 
             {message && <p style={styles.message}>{message}</p>}
 
-            {/* Files List */}
+                        {/* Files List */}
             <div style={styles.filesSection}>
               <h4>Files in "{activeProject.name}"</h4>
               {files.length === 0 && <p>No files yet. Upload one above!</p>}
@@ -254,6 +255,9 @@ export default function Dashboard() {
                 ))}
               </ul>
             </div>
+
+            {/* Chat Panel - NEW */}
+            <ChatPanel projectId={activeProject.id} />
           </div>
         ) : (
           <p style={styles.warning}>⚠️ Please select or create a project first.</p>

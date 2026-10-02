@@ -55,4 +55,8 @@ def search(project_id: int, query: str, top_k: int = 5):
         query_embeddings=[query_embedding],
         n_results=top_k
     )
-    return results["documents"][0]
+    
+    return {
+        "documents": results["documents"][0],
+        "ids": results["ids"][0]
+    }

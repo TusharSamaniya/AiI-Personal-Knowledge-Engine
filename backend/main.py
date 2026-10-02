@@ -12,6 +12,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
+from app.vector_store import search
+from app.llm_service import generate_answer
 
 
 
@@ -280,3 +282,51 @@ def list_files(
         }
         for f in files
     ]
+
+@app.post("/query")
+def query(
+    project_id: int,
+    question: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 2. Retrieve relevant chunks from ChromaDB
+    try:
+        results = search(project_id, question, top_k=5)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+    
+    if not results["documents"]:
+        return {
+            "answer": "No relevant content found in this project. Please upload some files first.",
+            "sources": []
+        }
+    
+    # 3. Generate grounded answer using Groq LLM
+    try:
+        answer = generate_answer(question, results["documents"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM failed: {str(e)}")
+    
+    # 4. Find the source file names for each retrieved chunk
+    sources = []
+    for vector_id in results["ids"]:
+        try:
+            chunk_id = int(vector_id.replace("chunk_", ""))
+            chunk = db.query(Chunk).filter(Chunk.id == chunk_id).first()
+            if chunk:
+                file_record = db.query(FileModel).filter(FileModel.id == chunk.file_id).first()
+                if file_record and file_record.name not in sources:
+                    sources.append(file_record.name)
+        except Exception:
+            continue
+    
+    return {"answer": answer, "sources": sources}

@@ -20,3 +20,4 @@ openai
 chromadb
 youtube-transcript-api
 beautifulsoup4
+groq
