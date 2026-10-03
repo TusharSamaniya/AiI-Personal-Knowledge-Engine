@@ -49,3 +49,14 @@ class Chunk(Base):
     text = Column(Text, nullable=False)
     chunk_index = Column(Integer)
     vector_id = Column(String, nullable=True)  
+
+class Integration(Base):
+    __tablename__ = "integrations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    type = Column(String, nullable=False)          # "google_drive", "slack", "notion", "jira"
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    status = Column(String, default="active")      # "active", "expired", "disconnected"
+    connected_at = Column(DateTime, server_default=func.now())
