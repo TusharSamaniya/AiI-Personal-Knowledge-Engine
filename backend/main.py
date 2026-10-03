@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project, File as FileModel
+from app.models import User, Project, File as FileModel, ChatHistory
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token
 from app.storage import LocalStorage
@@ -13,12 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from app.vector_store import search
-from fastapi.responses import StreamingResponse
-from app.llm_service import generate_answer, stream_answer
+from app.llm_service import generate_answer, stream_answer_async
 import json
-
-
-
 
 load_dotenv()
 
@@ -43,9 +39,11 @@ oauth.register(
     client_kwargs={"scope": "openid email profile"},
 )
 
+
 @app.get("/")
 def read_root():
     return {"message": "Backend is running!"}
+
 
 @app.post("/auth/register")
 def register(email: str, password: str, name: str, db: Session = Depends(get_db)):
@@ -58,6 +56,7 @@ def register(email: str, password: str, name: str, db: Session = Depends(get_db)
     db.refresh(new_user)
     return {"message": "User created successfully", "user_id": new_user.id}
 
+
 @app.post("/auth/login")
 def login(email: str, password: str, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == email).first()
@@ -66,10 +65,12 @@ def login(email: str, password: str, db: Session = Depends(get_db)):
     token = create_access_token({"sub": user.email})
     return {"access_token": token, "token_type": "bearer"}
 
+
 @app.get("/auth/google")
 async def auth_google(request: Request):
     redirect_uri = "http://localhost:8000/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
+
 
 @app.get("/auth/google/callback")
 async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
@@ -91,7 +92,6 @@ async def auth_google_callback(request: Request, db: Session = Depends(get_db)):
     
     access_token = create_access_token({"sub": user.email})
     
-    # NEW: Redirect to frontend with token in URL
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
     return RedirectResponse(url=f"{frontend_url}/auth/callback?token={access_token}")
 
@@ -106,6 +106,7 @@ def get_me(current_user: User = Depends(get_current_user)):
         "active_project_id": current_user.active_project_id
     }
 
+
 @app.put("/user/update")
 def update_user(name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     current_user.name = name
@@ -113,15 +114,16 @@ def update_user(name: str, current_user: User = Depends(get_current_user), db: S
     db.refresh(current_user)
     return {"message": "Profile updated successfully", "new_name": current_user.name}
 
+
 # ==========================================
-# NEW: Project Management Endpoints
+# Project Management Endpoints
 # ==========================================
 
 @app.post("/projects/create")
 def create_project(
     name: str,
     description: str = "",
-    current_user: User = Depends(require_role(["teacher", "admin"])), 
+    current_user: User = Depends(require_role(["teacher", "admin"])),
     db: Session = Depends(get_db)
 ):
     new_project = Project(user_id=current_user.id, name=name, description=description)
@@ -129,6 +131,7 @@ def create_project(
     db.commit()
     db.refresh(new_project)
     return {"message": "Project created", "project_id": new_project.id, "name": new_project.name}
+
 
 @app.get("/projects/list")
 def list_projects(
@@ -146,6 +149,7 @@ def list_projects(
         for p in projects
     ]
 
+
 @app.post("/projects/switch/{project_id}")
 def switch_project(
     project_id: int,
@@ -161,6 +165,7 @@ def switch_project(
     current_user.active_project_id = project.id
     db.commit()
     return {"message": f"Switched to project '{project.name}'"}
+
 
 @app.delete("/projects/delete/{project_id}")
 def delete_project(
@@ -180,23 +185,25 @@ def delete_project(
     db.commit()
     return {"message": f"Project '{project.name}' deleted"}
 
+
+# ==========================================
+# Ingestion Endpoints
+# ==========================================
+
 @app.post("/ingest/url")
 def ingest_url(
     url: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Check for active project
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
     
-    # 2. Detect source type
     if "youtube.com" in url or "youtu.be" in url:
         source_type = "youtube"
     else:
         source_type = "web"
     
-    # 3. Create DB record (name = URL)
     new_file = FileModel(
         project_id=current_user.active_project_id,
         name=url,
@@ -208,7 +215,6 @@ def ingest_url(
     db.commit()
     db.refresh(new_file)
     
-    # 4. Send to Celery
     ingest_file_task.delay(new_file.id)
     
     return {
@@ -216,8 +222,9 @@ def ingest_url(
         "file_id": new_file.id
     }
 
-# Re-add file upload endpoint (from Phase 1)
+
 storage = LocalStorage()
+
 
 @app.post("/upload")
 def upload_file(
@@ -225,17 +232,12 @@ def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Make sure the user has an active project
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
     
-    # 2. Save the file to disk
     saved_path = storage.save_file(file)
-    
-    # 3. Get the file extension (pdf, docx, txt, csv)
     file_type = file.filename.split('.')[-1].lower()
     
-    # 4. Create a database record for this file
     new_file = FileModel(
         project_id=current_user.active_project_id,
         name=file.filename,
@@ -246,7 +248,6 @@ def upload_file(
     db.commit()
     db.refresh(new_file)
     
-    # 5. Send the Celery task with the file ID (not filename!)
     ingest_file_task.delay(new_file.id)
     
     return {
@@ -255,13 +256,13 @@ def upload_file(
         "name": new_file.name
     }
 
+
 @app.get("/files/list/{project_id}")
 def list_files(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Security: only show files from projects owned by this user
     project = db.query(Project).filter(
         Project.id == project_id,
         Project.user_id == current_user.id
@@ -285,6 +286,11 @@ def list_files(
         for f in files
     ]
 
+
+# ==========================================
+# Query Endpoints
+# ==========================================
+
 @app.post("/query")
 def query(
     project_id: int,
@@ -292,7 +298,6 @@ def query(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Verify project ownership
     project = db.query(Project).filter(
         Project.id == project_id,
         Project.user_id == current_user.id
@@ -300,7 +305,6 @@ def query(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # 2. Retrieve relevant chunks with threshold filtering
     try:
         results = search(project_id, question, top_k=5, max_distance=2.0)
     except Exception as e:
@@ -312,16 +316,13 @@ def query(
             "sources": []
         }
     
-    # 3. Extract chunk texts for the LLM
     context_chunks = [r["text"] for r in results]
     
-    # 4. Generate grounded answer
     try:
         answer = generate_answer(question, context_chunks)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM failed: {str(e)}")
     
-    # 5. Find source file names from the metadata
     sources = []
     for r in results:
         file_id = r.get("file_id")
@@ -333,8 +334,9 @@ def query(
     
     return {"answer": answer, "sources": sources}
 
+
 @app.post("/query/stream")
-def query_stream(
+async def query_stream(
     project_id: int,
     question: str,
     current_user: User = Depends(get_current_user),
@@ -348,14 +350,14 @@ def query_stream(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # 2. Retrieve relevant chunks (same as before)
+    # 2. Retrieve relevant chunks
     try:
         results = search(project_id, question, top_k=5, max_distance=2.0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
     
     if not results:
-        def empty_stream():
+        async def empty_stream():
             yield f"data: {json.dumps({'type': 'token', 'text': 'No relevant content found in this project.'})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
@@ -373,18 +375,67 @@ def query_stream(
     context_chunks = [r["text"] for r in results]
     
     # 4. Stream the answer
-    def generate():
+    async def generate():
         # Send sources first
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
         
-        # Stream each token
+        full_answer = ""
+        
         try:
-            for token in stream_answer(question, context_chunks):
+            async for token in stream_answer_async(question, context_chunks):
+                full_answer += token
                 yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
         except Exception as e:
+            print(f"[STREAM] Error: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         
-        # Signal completion
+        if full_answer:
+            try:
+                history = ChatHistory(
+                    user_id=current_user.id,
+                    project_id=project_id,
+                    question=question,
+                    answer=full_answer
+                )
+                db.add(history)
+                db.commit()
+            except Exception as e:
+                print(f"[CHAT] Failed to save history: {str(e)}")
+        
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
     
+    # ⚠️ THIS WAS THE MISSING LINE ⚠️
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ==========================================
+# Chat History
+# ==========================================
+
+@app.get("/chat/history/{project_id}")
+def get_chat_history(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    history = db.query(ChatHistory).filter(
+        ChatHistory.project_id == project_id,
+        ChatHistory.user_id == current_user.id
+    ).order_by(ChatHistory.created_at.asc()).all()
+    
+    return [
+        {
+            "id": h.id,
+            "question": h.question,
+            "answer": h.answer,
+            "created_at": h.created_at
+        }
+        for h in history
+    ]

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import api from '../api/axios';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -11,6 +12,25 @@ export default function ChatPanel({ projectId }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+    // Load chat history when project changes
+  useEffect(() => {
+    if (!projectId) return;
+    
+    api.get(`/chat/history/${projectId}`)
+      .then(res => {
+        const historyMessages = [];
+        res.data.forEach(h => {
+          historyMessages.push({ role: 'user', text: h.question });
+          historyMessages.push({ role: 'ai', text: h.answer, sources: [] });
+        });
+        setMessages(historyMessages);
+      })
+      .catch(err => {
+        console.error('Failed to load chat history:', err);
+        setMessages([]);
+      });
+  }, [projectId]);
 
   const handleSend = async (e) => {
     e.preventDefault();

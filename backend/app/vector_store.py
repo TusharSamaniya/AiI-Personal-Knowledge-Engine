@@ -63,8 +63,6 @@ def search(project_id: int, query: str, top_k: int = 5, max_distance: float = 2.
         query_embeddings=[query_embedding],
         n_results=top_k
     )
-
-    print(f"[SEARCH] Distances: {results['distances'][0]}")
     
     # 3. Extract the parallel lists
     documents = results["documents"][0]
