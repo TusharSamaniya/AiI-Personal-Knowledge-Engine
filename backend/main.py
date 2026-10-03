@@ -15,6 +15,10 @@ from dotenv import load_dotenv
 from app.vector_store import search
 from app.llm_service import generate_answer, stream_answer_async
 import json
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -355,10 +359,11 @@ async def query_stream(
         results = search(project_id, question, top_k=5, max_distance=2.0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-    
+
     if not results:
         async def empty_stream():
-            yield f"data: {json.dumps({'type': 'token', 'text': 'No relevant content found in this project.'})}\n\n"
+            msg = "No relevant content found. This project may have no files yet, or your question may be unrelated to the uploaded content. Try uploading a PDF first, or ask a different question."
+            yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         return StreamingResponse(empty_stream(), media_type="text/event-stream")
     
@@ -380,14 +385,15 @@ async def query_stream(
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
         
         full_answer = ""
-        
         try:
             async for token in stream_answer_async(question, context_chunks):
                 full_answer += token
                 yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
         except Exception as e:
-            print(f"[STREAM] Error: {str(e)}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            error_msg = str(e) if str(e) else "Something went wrong. Please try again."
+            logger.error(f"[STREAM] Error: {error_msg}")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+        
         
         if full_answer:
             try:
