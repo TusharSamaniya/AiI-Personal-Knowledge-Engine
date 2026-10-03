@@ -2,9 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project, File as FileModel, ChatHistory
+from app.models import User, Project, File as FileModel, ChatHistory, Integration
 from app.auth import hash_password, verify_password, get_current_user, require_role
-from app.jwt_handler import create_access_token
+from app.jwt_handler import create_access_token, decode_access_token
 from app.storage import LocalStorage
 from app.celery_worker import ingest_file_task
 from authlib.integrations.starlette_client import OAuth
@@ -16,6 +16,8 @@ from app.vector_store import search
 from app.llm_service import generate_answer, stream_answer_async
 import json
 import logging
+from datetime import datetime, timedelta
+from app.integrations.drive import list_drive_files, download_drive_file
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -445,3 +447,149 @@ def get_chat_history(
         }
         for h in history
     ]
+
+@app.get("/integrations/drive/connect")
+async def drive_connect(token: str, request: Request, db: Session = Depends(get_db)):
+    # 1. Validate the JWT (because the browser navigation can't send Authorization headers)
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    user = db.query(User).filter(User.email == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 2. Store the user ID in the browser session
+    request.session["drive_user_id"] = user.id
+    
+    # 3. Redirect to Google with the Drive scope
+    redirect_uri = "http://localhost:8000/integrations/drive/callback"
+    return await oauth.google.authorize_redirect(
+        request,
+        redirect_uri,
+        scope="openid email profile https://www.googleapis.com/auth/drive.readonly",
+        access_type="offline",   # Request a refresh token
+        prompt="consent"         # Force consent screen (needed to get refresh token)
+    )
+
+@app.get("/integrations/drive/callback")
+async def drive_callback(request: Request, db: Session = Depends(get_db)):
+    # 1. Get the user ID from the session
+    user_id = request.session.get("drive_user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Session expired. Please reconnect Drive.")
+    
+    # 2. Exchange the code for tokens
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
+    
+    # 3. Save or update the integration in the database
+    integration = db.query(Integration).filter(
+        Integration.user_id == user_id,
+        Integration.type == "google_drive"
+    ).first()
+    
+    expires_at = datetime.utcnow() + timedelta(seconds=token.get("expires_in", 3600))
+    
+    if integration:
+        # User reconnected → update existing row
+        integration.access_token = token["access_token"]
+        if token.get("refresh_token"):
+            integration.refresh_token = token["refresh_token"]
+        integration.expires_at = expires_at
+        integration.status = "active"
+    else:
+        # New connection → create new row
+        integration = Integration(
+            user_id=user_id,
+            type="google_drive",
+            access_token=token["access_token"],
+            refresh_token=token.get("refresh_token"),
+            expires_at=expires_at,
+            status="active"
+        )
+        db.add(integration)
+    
+    db.commit()
+    
+    # 4. Redirect the browser back to the frontend
+    return RedirectResponse(url="http://localhost:5173/dashboard?drive=connected")
+
+@app.get("/integrations/drive/files")
+async def drive_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Find the user's active Drive integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "google_drive",
+        Integration.status == "active"
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Google Drive not connected")
+    
+    # 2. List the files
+    try:
+        files = await list_drive_files(integration.access_token)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list Drive files: {str(e)}")
+    
+    return files
+
+@app.post("/integrations/drive/import")
+async def drive_import(
+    file_id: str,
+    file_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Verify the user has an active project
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 2. Verify the user has an active Drive integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "google_drive",
+        Integration.status == "active"
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Google Drive not connected")
+    
+    # 3. Download the file content from Drive
+    try:
+        content = await download_drive_file(integration.access_token, file_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+    
+    # 4. Save the file to disk (same place as regular uploads)
+    safe_name = file_name.replace("/", "_").replace("\\", "_")
+    file_path = f"uploads/{safe_name}"
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    # 5. Determine file type from extension
+    file_type = safe_name.split('.')[-1].lower() if '.' in safe_name else "bin"
+    
+    # 6. Create a database record
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=safe_name,
+        file_type=file_type,
+        source_type="file",
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    
+    # 7. Send to Celery for processing
+    ingest_file_task.delay(new_file.id)
+    
+    return {
+        "message": f"Importing '{safe_name}'...",
+        "file_id": new_file.id
+    }

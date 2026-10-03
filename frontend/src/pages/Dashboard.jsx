@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import ChatPanel from '../components/ChatPanel';
+import DriveIntegration from '../components/DriveIntegration';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -225,6 +226,9 @@ export default function Dashboard() {
                 Add URL
               </button>
             </form>
+
+            {/* Google Drive Integration */}
+            <DriveIntegration />
 
             {message && <p style={styles.message}>{message}</p>}
 
