@@ -16,8 +16,16 @@ async_groq_client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
 def generate_answer(question: str, context_chunks: list) -> str:
     context = "\n\n---\n\n".join(context_chunks)
-    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the context below.
-If the answer is not in the context, say "I don't know based on the provided documents."
+    prompt = f"""You are a helpful assistant. Use the context below to answer the user's question.
+
+Each piece of context starts with a [Source: filename] tag identifying which document it came from.
+
+Rules:
+- If the user mentions a specific document, use the [Source: ...] tags to find the right chunk.
+- If the context contains information that answers the question (even if not word-for-word), provide a helpful, grounded answer.
+- You may summarize, paraphrase, or synthesize information from the context.
+- Only say "I don't know based on the provided documents" if none of the context chunks are related to the question.
+- Do not make up facts that are not in the context.
 
 Context:
 {context}
@@ -38,13 +46,15 @@ async def stream_answer_async(question: str, context_chunks: list, max_retries: 
     logger.info(f"[LLM] Starting stream for: {question[:60]}...")
     
     context = "\n\n---\n\n".join(context_chunks)
-    prompt = f"""You are a helpful assistant. Use the context below to answer the user's question.
+    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the context below.
 
-Rules:
-- If the context contains information that answers the question (even if not word-for-word), provide a helpful, grounded answer.
-- You may summarize, paraphrase, or synthesize information from the context.
-- Only say "I don't know based on the provided documents" if the context is truly unrelated to the question.
-- Do not make up facts that are not in the context.
+The context is a list of chunks. Each chunk starts with a [Source: filename] tag telling you which document it came from.
+
+IMPORTANT RULES:
+1. If the user mentions a specific document name (like "Artificial intelligence" or "First Meeting"), ONLY use chunks whose [Source: ...] tag matches that name.
+2. If the user's question is general, use ALL chunks but base your answer on the most relevant one.
+3. Do NOT use chunks from a different document just because they mention similar words.
+4. If the answer truly isn't in any chunk, say "I don't know based on the provided documents."
 
 Context:
 {context}

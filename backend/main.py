@@ -328,7 +328,16 @@ def query(
             "sources": []
         }
     
-    context_chunks = [r["text"] for r in results]
+        # Build context with source file names attached
+    context_chunks = []
+    for r in results:
+        file_id = r.get("file_id")
+        file_name = "Unknown"
+        if file_id:
+            file_rec = db.query(FileModel).filter(FileModel.id == file_id).first()
+            if file_rec:
+                file_name = file_rec.name
+        context_chunks.append(f"[Source: {file_name}]\n{r['text']}")
     
     try:
         answer = generate_answer(question, context_chunks)
