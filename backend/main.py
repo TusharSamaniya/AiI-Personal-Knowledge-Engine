@@ -18,6 +18,12 @@ import json
 import logging
 from datetime import datetime, timedelta
 from app.integrations.drive import list_drive_files, download_drive_file
+from app.integrations.notion import (
+    get_notion_auth_url,
+    exchange_code_for_token as notion_exchange_code,
+    list_notion_pages,
+    fetch_page_text
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -593,3 +599,170 @@ async def drive_import(
         "message": f"Importing '{safe_name}'...",
         "file_id": new_file.id
     }
+
+@app.get("/integrations/notion/connect")
+async def notion_connect(token: str):
+    """Redirect the user to Notion's OAuth consent page.
+    We pass the JWT as `state` so we can identify the user on callback.
+    """
+    # Validate the JWT first
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Build Notion's auth URL with the JWT as state
+    auth_url = get_notion_auth_url(state=token)
+    return RedirectResponse(url=auth_url)
+
+@app.get("/integrations/notion/callback")
+async def notion_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """Notion redirects here after user approval.
+    `code` is the OAuth code, `state` is our JWT (which we passed earlier).
+    """
+    # 1. Validate the JWT from state
+    payload = decode_access_token(state)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid state token")
+    
+    user = db.query(User).filter(User.email == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 2. Exchange code for access token
+    try:
+        token_data = await notion_exchange_code(code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
+    
+    access_token = token_data.get("access_token")
+    workspace_id = token_data.get("workspace_id")
+    workspace_name = token_data.get("workspace_name", "")
+    bot_id = token_data.get("bot_id")
+    
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No access token returned from Notion")
+    
+    # 3. Save or update the integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == user.id,
+        Integration.type == "notion"
+    ).first()
+    
+    if integration:
+        integration.access_token = access_token
+        integration.status = "active"
+    else:
+        integration = Integration(
+            user_id=user.id,
+            type="notion",
+            access_token=access_token,
+            refresh_token=None,   # Notion tokens don't expire
+            expires_at=None,       # No expiry
+            status="active"
+        )
+        db.add(integration)
+    
+    db.commit()
+    
+    # 4. Redirect back to the frontend
+    return RedirectResponse(url="http://localhost:5173/dashboard?notion=connected")
+
+@app.get("/integrations/notion/pages")
+async def notion_pages(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all Notion pages the user has shared with our integration."""
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "notion",
+        Integration.status == "active"
+    ).first()
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail="Notion not connected")
+    
+    try:
+        raw_pages = await list_notion_pages(integration.access_token)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list pages: {str(e)}")
+    
+    # Extract just the fields we need
+    pages = []
+    for p in raw_pages:
+        # Get the page title from the "title" property
+        title = "Untitled"
+        properties = p.get("properties", {})
+        for prop in properties.values():
+            if prop.get("type") == "title":
+                title_arr = prop.get("title", [])
+                if title_arr:
+                    title = "".join(t.get("plain_text", "") for t in title_arr)
+                break
+        
+        pages.append({
+            "id": p.get("id"),
+            "title": title,
+            "url": p.get("url", ""),
+            "last_edited": p.get("last_edited_time", "")
+        })
+    
+    return pages
+
+@app.post("/integrations/notion/import")
+async def notion_import(
+    page_id: str,
+    page_title: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Import a Notion page's text content into the RAG pipeline."""
+    # 1. Verify active project
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 2. Verify Notion integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "notion",
+        Integration.status == "active"
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Notion not connected")
+    
+    # 3. Fetch the full page text (recursive)
+    try:
+        text_content = await fetch_page_text(integration.access_token, page_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch page: {str(e)}")
+    
+    if not text_content or len(text_content.strip()) < 20:
+        raise HTTPException(status_code=400, detail="Page is empty or has no readable text")
+    
+    # 4. Save as a .txt file (same folder as uploads)
+    safe_title = "".join(c for c in page_title if c.isalnum() or c in " _-")[:60] or "notion_page"
+    file_name = f"{safe_title}.txt"
+    file_path = f"uploads/{file_name}"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(text_content)
+    
+    # 5. Create DB record
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=file_name,
+        file_type="txt",
+        source_type="notion",
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    
+    # 6. Send to Celery
+    ingest_file_task.delay(new_file.id)
+    
+    return {
+        "message": f"Importing Notion page '{page_title}'...",
+        "file_id": new_file.id
+    }
+

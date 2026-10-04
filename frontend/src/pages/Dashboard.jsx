@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import ChatPanel from '../components/ChatPanel';
 import DriveIntegration from '../components/DriveIntegration';
+import NotionIntegration from '../components/NotionIntegration';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -229,6 +230,9 @@ export default function Dashboard() {
 
             {/* Google Drive Integration */}
             <DriveIntegration />
+
+            {/* Notion Integration */}
+            <NotionIntegration />
 
             {message && <p style={styles.message}>{message}</p>}
 

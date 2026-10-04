@@ -38,8 +38,13 @@ async def stream_answer_async(question: str, context_chunks: list, max_retries: 
     logger.info(f"[LLM] Starting stream for: {question[:60]}...")
     
     context = "\n\n---\n\n".join(context_chunks)
-    prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the context below.
-If the answer is not in the context, say "I don't know based on the provided documents."
+    prompt = f"""You are a helpful assistant. Use the context below to answer the user's question.
+
+Rules:
+- If the context contains information that answers the question (even if not word-for-word), provide a helpful, grounded answer.
+- You may summarize, paraphrase, or synthesize information from the context.
+- Only say "I don't know based on the provided documents" if the context is truly unrelated to the question.
+- Do not make up facts that are not in the context.
 
 Context:
 {context}
