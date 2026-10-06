@@ -17,7 +17,7 @@ from app.llm_service import generate_answer, stream_answer_async
 import json
 import logging
 from datetime import datetime, timedelta
-from app.integrations.drive import list_drive_files, download_drive_file
+from app.integrations.drive import list_drive_files, download_drive_file, refresh_drive_token
 from app.integrations.notion import (
     get_notion_auth_url,
     exchange_code_for_token as notion_exchange_code,
@@ -67,6 +67,31 @@ async def get_valid_jira_token(integration, db):
         integration.refresh_token = new_tokens["refresh_token"]
     db.commit()
     
+    return integration.access_token
+
+async def get_valid_drive_token(integration, db):
+    """Returns a valid Google Drive access token, refreshing if expired."""
+    now = datetime.utcnow()
+    
+    if integration.expires_at and integration.expires_at > now + timedelta(minutes=5):
+        return integration.access_token
+    
+    if not integration.refresh_token:
+        integration.status = "expired"
+        db.commit()
+        raise HTTPException(status_code=401, detail="Drive connection expired. Please reconnect.")
+    
+    try:
+        tokens = await refresh_drive_token(integration.refresh_token)
+    except Exception as e:
+        # Refresh failed permanently — mark integration as expired
+        integration.status = "expired"
+        db.commit()
+        raise HTTPException(status_code=401, detail="Drive connection expired. Please reconnect.")
+    
+    integration.access_token = tokens["access_token"]
+    integration.expires_at = now + timedelta(seconds=tokens.get("expires_in", 3600))
+    db.commit()
     return integration.access_token
 
 logging.basicConfig(level=logging.INFO)
@@ -581,18 +606,21 @@ async def drive_files(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Find the user's active Drive integration
     integration = db.query(Integration).filter(
         Integration.user_id == current_user.id,
-        Integration.type == "google_drive",
-        Integration.status == "active"
+        Integration.type == "google_drive"
     ).first()
+    
     if not integration:
         raise HTTPException(status_code=404, detail="Google Drive not connected")
     
-    # 2. List the files
+    if integration.status == "expired":
+        raise HTTPException(status_code=401, detail="Drive connection expired. Please reconnect.")
+    
+    token = await get_valid_drive_token(integration, db)
+    
     try:
-        files = await list_drive_files(integration.access_token)
+        files = await list_drive_files(token)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list Drive files: {str(e)}")
     

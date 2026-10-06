@@ -32,7 +32,7 @@ export default function IntegrationsManager() {
     if (!window.confirm(`Disconnect ${INTEGRATION_INFO[type]?.name || type}?`)) return;
     try {
       await api.delete(`/integrations/disconnect/${type}`);
-      fetchIntegrations();  // Refresh the list
+      fetchIntegrations();
     } catch (err) {
       alert('Failed to disconnect. Please try again.');
     }
@@ -44,9 +44,6 @@ export default function IntegrationsManager() {
       year: 'numeric', month: 'short', day: 'numeric'
     });
   };
-
-  // Build a lookup for connected types
-  const connectedTypes = new Set(integrations.map(i => i.type));
 
   return (
     <div style={styles.container}>
@@ -66,20 +63,25 @@ export default function IntegrationsManager() {
       <div style={styles.grid}>
         {Object.entries(INTEGRATION_INFO).map(([type, info]) => {
           const integration = integrations.find(i => i.type === type);
-          const isConnected = connectedTypes.has(type);
+          const isConnected = integration && integration.status === 'active';
+          const isExpired = integration && integration.status === 'expired';
+          const notConnected = !integration;
 
           return (
-            <div key={type} style={{
-              ...styles.card,
-              borderColor: isConnected ? info.color : '#e0e0e0',
-              opacity: isConnected ? 1 : 0.65,
-            }}>
+            <div
+              key={type}
+              style={{
+                ...styles.card,
+                borderColor: isConnected ? info.color : (isExpired ? '#dc3545' : '#e0e0e0'),
+                opacity: notConnected ? 0.65 : 1,
+              }}
+            >
               <div style={styles.cardHeader}>
                 <span style={styles.cardIcon}>{info.icon}</span>
                 <span style={styles.cardName}>{info.name}</span>
               </div>
 
-              {isConnected ? (
+              {isConnected && (
                 <>
                   <p style={styles.cardStatus}>
                     <span style={{ color: '#28a745' }}>● Connected</span>
@@ -94,7 +96,24 @@ export default function IntegrationsManager() {
                     Disconnect
                   </button>
                 </>
-              ) : (
+              )}
+
+              {isExpired && (
+                <>
+                  <p style={styles.cardStatus}>
+                    <span style={{ color: '#dc3545' }}>⚠ Expired</span>
+                  </p>
+                  <p style={styles.cardDate}>Please reconnect</p>
+                  <button
+                    onClick={() => handleDisconnect(type)}
+                    style={styles.disconnectButton}
+                  >
+                    Remove
+                  </button>
+                </>
+              )}
+
+              {notConnected && (
                 <p style={styles.cardStatus}>
                   <span style={{ color: '#999' }}>○ Not connected</span>
                 </p>
