@@ -5,6 +5,7 @@ import api from '../api/axios';
 import ChatPanel from '../components/ChatPanel';
 import DriveIntegration from '../components/DriveIntegration';
 import NotionIntegration from '../components/NotionIntegration';
+import SlackIntegration from '../components/SlackIntegration';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -233,6 +234,9 @@ export default function Dashboard() {
 
             {/* Notion Integration */}
             <NotionIntegration />
+
+            {/* Slack Integration */}
+            <SlackIntegration />
 
             {message && <p style={styles.message}>{message}</p>}
 

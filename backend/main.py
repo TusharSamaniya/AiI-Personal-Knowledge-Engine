@@ -24,6 +24,15 @@ from app.integrations.notion import (
     list_notion_pages,
     fetch_page_text
 )
+from app.integrations.slack import (
+    get_slack_auth_url,
+    exchange_code_for_token as slack_exchange_code,
+    list_slack_channels,
+    list_slack_users,
+    fetch_channel_messages,
+    format_messages,
+    join_slack_channel
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -774,4 +783,200 @@ async def notion_import(
         "message": f"Importing Notion page '{page_title}'...",
         "file_id": new_file.id
     }
+@app.get("/integrations/slack/connect")
+async def slack_connect(token: str):
+    """Redirect user to Slack's OAuth consent page."""
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    auth_url = get_slack_auth_url(state=token)
+    return RedirectResponse(url=auth_url)
 
+@app.get("/integrations/slack/callback")
+async def slack_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """Slack redirects here after user approves."""
+    # Validate JWT from state
+    payload = decode_access_token(state)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid state token")
+    
+    user = db.query(User).filter(User.email == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Exchange code for bot token
+    try:
+        token_data = await slack_exchange_code(code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Slack token exchange failed: {str(e)}")
+    
+    # The bot token is at token_data["access_token"]
+    bot_token = token_data.get("access_token")
+    team_info = token_data.get("team", {})
+    team_name = team_info.get("name", "")
+    
+    if not bot_token:
+        raise HTTPException(status_code=400, detail="No bot token returned from Slack")
+    
+    # Save or update integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == user.id,
+        Integration.type == "slack"
+    ).first()
+    
+    if integration:
+        integration.access_token = bot_token
+        integration.status = "active"
+    else:
+        integration = Integration(
+            user_id=user.id,
+            type="slack",
+            access_token=bot_token,
+            refresh_token=None,
+            expires_at=None,
+            status="active"
+        )
+        db.add(integration)
+    
+    db.commit()
+    
+    return RedirectResponse(url="http://localhost:5173/dashboard?slack=connected")
+
+@app.get("/integrations/slack/channels")
+async def slack_channels(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all channels the bot has access to."""
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "slack",
+        Integration.status == "active"
+    ).first()
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack not connected")
+    
+    try:
+        channels = await list_slack_channels(integration.access_token)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list channels: {str(e)}")
+    
+    # Return just what the frontend needs
+    return [
+        {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "is_private": c.get("is_private", False),
+            "member_count": c.get("num_members", 0)
+        }
+        for c in channels
+    ]
+
+@app.post("/integrations/slack/import")
+async def slack_import(
+    channel_id: str,
+    channel_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Import all messages from a Slack channel into the RAG pipeline."""
+    # 1. Verify active project
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project.")
+    
+    # 2. Get the Slack integration
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "slack",
+        Integration.status == "active"
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Slack not connected")
+    
+    token = integration.access_token
+    print(f"[SLACK-1] Starting import for #{channel_name}", flush=True)
+    
+    # 3. Fetch users and messages
+    try:
+        user_map = await list_slack_users(token)
+        print(f"[SLACK-2] Fetched {len(user_map)} users", flush=True)
+    except Exception as e:
+        print(f"[SLACK-ERROR] list_slack_users failed: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list users: {e}")
+    
+        # 3b. Try to auto-join the channel (for public channels)
+    try:
+        await join_slack_channel(token, channel_id)
+        print(f"[SLACK-3a] Joined channel (or already in it)", flush=True)
+    except Exception as e:
+        print(f"[SLACK-3a-WARN] Auto-join failed: {e}", flush=True)
+        # Don't fail here — the fetch below will give a clearer error if needed
+    
+    try:
+        messages = await fetch_channel_messages(token, channel_id)
+        print(f"[SLACK-3] Fetched {len(messages)} messages", flush=True)
+    except Exception as e:
+        print(f"[SLACK-ERROR] fetch_channel_messages failed: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch messages: {e}")
+    
+    if not messages:
+        raise HTTPException(status_code=400, detail="Channel has no messages to import")
+    
+    # DEBUG: Show a sample message
+    try:
+        sample = messages[0]
+        print(f"[SLACK-4] First message type: {type(sample)}", flush=True)
+        if isinstance(sample, dict):
+            print(f"[SLACK-4] First message keys: {list(sample.keys())}", flush=True)
+            print(f"[SLACK-4] First message text: {sample.get('text')!r}", flush=True)
+    except Exception as e:
+        print(f"[SLACK-WARN] Debug sample failed: {e}", flush=True)
+    
+    # 4. Format messages
+    try:
+        formatted_text = format_messages(messages, user_map)
+        print(f"[SLACK-5] Formatted text length: {len(formatted_text)}", flush=True)
+    except Exception as e:
+        import traceback
+        print(f"[SLACK-ERROR] format_messages failed: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Format failed: {type(e).__name__}: {e}")
+    
+    if not formatted_text or len(formatted_text.strip()) < 20:
+        raise HTTPException(status_code=400, detail="Channel has no readable messages")
+    
+    # 5. Save as .txt file
+    safe_name = f"slack_{channel_name}"
+    file_name = f"{safe_name}.txt"
+    file_path = f"uploads/{file_name}"
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(formatted_text)
+        print(f"[SLACK-6] File written: {file_path}", flush=True)
+    except Exception as e:
+        print(f"[SLACK-ERROR] File write failed: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"File write failed: {e}")
+    
+    # 6. Create DB record
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=file_name,
+        file_type="txt",
+        source_type="slack",
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    print(f"[SLACK-7] DB record created: id={new_file.id}", flush=True)
+    
+    # 7. Send to Celery
+    ingest_file_task.delay(new_file.id)
+    print(f"[SLACK-8] Celery task queued", flush=True)
+    
+    return {
+        "message": f"Importing #{channel_name} ({len(messages)} messages)...",
+        "file_id": new_file.id
+    }
