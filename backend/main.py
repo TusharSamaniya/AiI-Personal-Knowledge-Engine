@@ -1217,3 +1217,50 @@ async def jira_import(
         "message": f"Importing {len(issues)} issues from {project_name}...",
         "file_id": new_file.id
     }
+
+# ==========================================
+# Integration Management
+# ==========================================
+
+@app.get("/integrations/list")
+def list_all_integrations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all integrations the current user has connected."""
+    integrations = db.query(Integration).filter(
+        Integration.user_id == current_user.id
+    ).order_by(Integration.connected_at.desc()).all()
+    
+    return [
+        {
+            "id": i.id,
+            "type": i.type,
+            "status": i.status,
+            "connected_at": i.connected_at,
+            "expires_at": i.expires_at,
+            "has_refresh_token": bool(i.refresh_token),
+        }
+        for i in integrations
+    ]
+
+
+@app.delete("/integrations/disconnect/{integration_type}")
+def disconnect_integration(
+    integration_type: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Disconnect an integration by type (e.g., 'google_drive', 'slack', 'notion', 'jira')."""
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == integration_type
+    ).first()
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail=f"No {integration_type} integration found")
+    
+    db.delete(integration)
+    db.commit()
+    
+    return {"message": f"Disconnected {integration_type} successfully"}

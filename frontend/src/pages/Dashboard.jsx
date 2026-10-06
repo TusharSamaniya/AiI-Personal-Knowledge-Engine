@@ -7,6 +7,7 @@ import DriveIntegration from '../components/DriveIntegration';
 import NotionIntegration from '../components/NotionIntegration';
 import SlackIntegration from '../components/SlackIntegration';
 import JiraIntegration from '../components/JiraIntegration';
+import IntegrationsManager from '../components/IntegrationsManager';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -189,6 +190,8 @@ export default function Dashboard() {
         {activeProject ? (
           <div style={styles.uploadSection}>
             <h4>Add Content to "{activeProject.name}"</h4>
+
+            <IntegrationsManager />
 
             {/* File Upload Box */}
             <div
