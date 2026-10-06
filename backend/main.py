@@ -33,6 +33,41 @@ from app.integrations.slack import (
     format_messages,
     join_slack_channel
 )
+from app.integrations.jira import (
+    get_jira_auth_url,
+    exchange_code_for_token as jira_exchange_code,
+    refresh_access_token as jira_refresh_token,
+    get_accessible_resources as jira_get_sites,
+    list_jira_projects,
+    list_jira_users,
+    search_jira_issues,
+    format_issues_for_rag
+)
+
+async def get_valid_jira_token(integration, db):
+    """Returns a valid Jira access token, refreshing if expired."""
+    now = datetime.utcnow()
+    
+    # If token is still valid (with 5-minute buffer), use it
+    if integration.expires_at and integration.expires_at > now + timedelta(minutes=5):
+        return integration.access_token
+    
+    # Token expired — refresh
+    if not integration.refresh_token:
+        raise HTTPException(status_code=401, detail="Jira session expired. Please reconnect.")
+    
+    try:
+        new_tokens = await jira_refresh_token(integration.refresh_token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Jira token refresh failed: {str(e)}")
+    
+    integration.access_token = new_tokens["access_token"]
+    integration.expires_at = now + timedelta(seconds=new_tokens.get("expires_in", 3600))
+    if new_tokens.get("refresh_token"):
+        integration.refresh_token = new_tokens["refresh_token"]
+    db.commit()
+    
+    return integration.access_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -978,5 +1013,207 @@ async def slack_import(
     
     return {
         "message": f"Importing #{channel_name} ({len(messages)} messages)...",
+        "file_id": new_file.id
+    }
+
+@app.get("/integrations/jira/connect")
+async def jira_connect(token: str):
+    """Redirect user to Atlassian OAuth consent page."""
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    auth_url = get_jira_auth_url(state=token)
+    return RedirectResponse(url=auth_url)
+
+@app.get("/integrations/jira/callback")
+async def jira_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """Handle Atlassian's redirect — exchange code for tokens."""
+    payload = decode_access_token(state)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid state token")
+    
+    user = db.query(User).filter(User.email == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    try:
+        tokens = await jira_exchange_code(code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
+    
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    expires_in = tokens.get("expires_in", 3600)
+    
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No access token returned")
+    
+    expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+    
+    integration = db.query(Integration).filter(
+        Integration.user_id == user.id,
+        Integration.type == "jira"
+    ).first()
+    
+    if integration:
+        integration.access_token = access_token
+        integration.refresh_token = refresh_token
+        integration.expires_at = expires_at
+        integration.status = "active"
+    else:
+        integration = Integration(
+            user_id=user.id,
+            type="jira",
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=expires_at,
+            status="active"
+        )
+        db.add(integration)
+    
+    db.commit()
+    
+    return RedirectResponse(url="http://localhost:5173/dashboard?jira=connected")
+
+@app.get("/integrations/jira/sites")
+async def jira_sites(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all Jira sites the user has access to."""
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "jira",
+        Integration.status == "active"
+    ).first()
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+    
+    token = await get_valid_jira_token(integration, db)
+    
+    try:
+        sites = await jira_get_sites(token)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list sites: {str(e)}")
+    
+    return [
+        {
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "url": s.get("url"),
+            "avatar_url": s.get("avatarUrl")
+        }
+        for s in sites
+    ]
+
+@app.get("/integrations/jira/projects")
+async def jira_projects(
+    cloud_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all projects in a specific Jira site."""
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "jira",
+        Integration.status == "active"
+    ).first()
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+    
+    token = await get_valid_jira_token(integration, db)
+    
+    try:
+        projects = await list_jira_projects(token, cloud_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
+    
+    return [
+        {
+            "id": p.get("id"),
+            "key": p.get("key"),
+            "name": p.get("name"),
+            "project_type": p.get("projectTypeKey")
+        }
+        for p in projects
+    ]
+
+@app.post("/integrations/jira/import")
+async def jira_import(
+    cloud_id: str,
+    project_key: str,
+    project_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Import all issues from a Jira project into the RAG pipeline."""
+    if not current_user.active_project_id:
+        raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    integration = db.query(Integration).filter(
+        Integration.user_id == current_user.id,
+        Integration.type == "jira",
+        Integration.status == "active"
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+    
+    token = await get_valid_jira_token(integration, db)
+    print(f"[JIRA-1] Starting import for {project_key} ({project_name})", flush=True)
+    
+    # Fetch users for name resolution
+    try:
+        user_map = await list_jira_users(token, cloud_id)
+        print(f"[JIRA-2] Fetched {len(user_map)} users", flush=True)
+    except Exception as e:
+        print(f"[JIRA-WARN] User fetch failed: {e}", flush=True)
+        user_map = {}  # Non-fatal, continue with IDs
+    
+    # Fetch issues
+    try:
+        issues = await search_jira_issues(token, cloud_id, project_key)
+        print(f"[JIRA-3] Fetched {len(issues)} issues", flush=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch issues: {str(e)}")
+    
+    if not issues:
+        raise HTTPException(status_code=400, detail="Project has no issues to import")
+    
+    # Format for RAG
+    try:
+        formatted_text = format_issues_for_rag(issues, user_map, project_name)
+        print(f"[JIRA-4] Formatted text length: {len(formatted_text)}", flush=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Format failed: {str(e)}")
+    
+    # Save as .txt file
+    safe_name = "".join(c for c in project_key if c.isalnum() or c in "_-")[:40] or "project"
+    file_name = f"jira_{safe_name}.txt"
+    file_path = f"uploads/{file_name}"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(formatted_text)
+    print(f"[JIRA-5] File written: {file_path}", flush=True)
+    
+    # Create DB record
+    new_file = FileModel(
+        project_id=current_user.active_project_id,
+        name=file_name,
+        file_type="txt",
+        source_type="jira",
+        status="processing"
+    )
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+    
+    # Send to Celery
+    ingest_file_task.delay(new_file.id)
+    print(f"[JIRA-6] Queued for processing: file_id={new_file.id}", flush=True)
+    
+    return {
+        "message": f"Importing {len(issues)} issues from {project_name}...",
         "file_id": new_file.id
     }

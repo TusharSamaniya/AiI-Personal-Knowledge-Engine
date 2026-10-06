@@ -6,6 +6,7 @@ import ChatPanel from '../components/ChatPanel';
 import DriveIntegration from '../components/DriveIntegration';
 import NotionIntegration from '../components/NotionIntegration';
 import SlackIntegration from '../components/SlackIntegration';
+import JiraIntegration from '../components/JiraIntegration';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -237,6 +238,9 @@ export default function Dashboard() {
 
             {/* Slack Integration */}
             <SlackIntegration />
+
+            {/* Jira Integration */}
+            <JiraIntegration />
 
             {message && <p style={styles.message}>{message}</p>}
 
