@@ -136,3 +136,81 @@ Content:
     
     raw = response.choices[0].message.content
     return json.loads(raw)
+
+async def generate_flashcards(content: str, num_cards: int = 10) -> list:
+    """Generate Q/A flashcard pairs from content."""
+    prompt = f"""You are a flashcard generator. Create exactly {num_cards} flashcards from the content below.
+
+Return ONLY a valid JSON object with this exact structure:
+{{
+  "cards": [
+    {{"front": "Question or term", "back": "Answer or definition"}},
+    {{"front": "...", "back": "..."}}
+  ]
+}}
+
+Rules:
+- "front" should be a question or a term.
+- "back" should be a concise answer (1-2 sentences max).
+- Only use facts from the content. Do not invent anything.
+- Return exactly {num_cards} cards.
+
+Content:
+{content}
+"""
+    
+    response = await async_groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5,
+        response_format={"type": "json_object"}
+    )
+    
+    raw = response.choices[0].message.content
+    return json.loads(raw).get("cards", [])
+
+
+async def summarize_content(content: str) -> str:
+    """Generate a one-paragraph summary of the content."""
+    prompt = f"""Summarize the following content in ONE paragraph (max 150 words).
+Cover the main ideas. Do not add commentary or facts not in the content.
+
+Content:
+{content}
+
+Summary:"""
+    
+    response = await async_groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
+    )
+    
+    return response.choices[0].message.content.strip()
+
+
+async def explain_like_im_5(question: str, content: str) -> str:
+    """Answer a question using simple, kid-friendly language."""
+    prompt = f"""You are explaining a concept to a 5-year-old.
+
+Rules:
+- Use simple words (no jargon).
+- Use short sentences.
+- Include ONE everyday analogy (like toys, food, playground).
+- Keep it under 120 words.
+- Only use facts from the context below.
+
+Context:
+{content}
+
+Question: {question}
+
+Simple explanation:"""
+    
+    response = await async_groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5
+    )
+    
+    return response.choices[0].message.content.strip()

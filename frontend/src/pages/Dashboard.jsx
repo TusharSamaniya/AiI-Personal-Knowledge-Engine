@@ -9,6 +9,7 @@ import SlackIntegration from '../components/SlackIntegration';
 import JiraIntegration from '../components/JiraIntegration';
 import IntegrationsManager from '../components/IntegrationsManager';
 import QuizPanel from '../components/QuizPanel';
+import StudyTools from '../components/StudyTools';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -284,6 +285,9 @@ export default function Dashboard() {
 
             {/* Quiz Panel */}
             <QuizPanel projectId={activeProject.id} />
+
+            {/* Study Tools */}
+            <StudyTools projectId={activeProject.id} />
 
           </div>
         ) : (

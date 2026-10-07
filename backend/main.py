@@ -13,7 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from app.vector_store import search, get_collection
-from app.llm_service import generate_answer, stream_answer_async, generate_quiz
+from app.llm_service import (
+    generate_answer,
+    stream_answer_async,
+    generate_quiz,
+    generate_flashcards,
+    summarize_content,
+    explain_like_im_5
+)
 import json
 import logging
 from datetime import datetime, timedelta
@@ -44,6 +51,7 @@ from app.integrations.jira import (
     format_issues_for_rag
 )
 import random
+
 
 async def get_valid_jira_token(integration, db):
     """Returns a valid Jira access token, refreshing if expired."""
@@ -1453,3 +1461,70 @@ def quiz_history(
         }
         for a in attempts
     ]
+# ==========================================
+# Study Tools Endpoints
+# ==========================================
+
+@app.post("/study/generate")
+async def study_generate(
+    project_id: int,
+    mode: str,                       # "flashcards" | "summary" | "eli5"
+    question: str = "",              # only used for eli5 mode
+    num_cards: int = 10,             # only used for flashcards mode
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate study tools (flashcards, summaries, or ELI5 explanations)."""
+    # 1. Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 2. Fetch content from ChromaDB
+    try:
+        collection = get_collection(project_id)
+        if collection.count() == 0:
+            raise HTTPException(status_code=400, detail="No content in this project.")
+        all_data = collection.get()
+        documents = all_data.get("documents") or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch content: {str(e)}")
+    
+    if not documents:
+        raise HTTPException(status_code=400, detail="No content available")
+    
+    # 3. Sample chunks and build content
+    sample_size = min(10, len(documents))
+    sampled = random.sample(documents, sample_size)
+    content = "\n\n---\n\n".join(sampled)
+    if len(content) > 8000:
+        content = content[:8000]
+    
+    # 4. Dispatch based on mode
+    try:
+        if mode == "flashcards":
+            cards = await generate_flashcards(content, num_cards)
+            return {"mode": "flashcards", "cards": cards}
+        
+        elif mode == "summary":
+            summary = await summarize_content(content)
+            return {"mode": "summary", "summary": summary}
+        
+        elif mode == "eli5":
+            if not question.strip():
+                raise HTTPException(status_code=400, detail="Please provide a question for ELI5 mode.")
+            answer = await explain_like_im_5(question, content)
+            return {"mode": "eli5", "answer": answer}
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
