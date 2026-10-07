@@ -10,6 +10,7 @@ import JiraIntegration from '../components/JiraIntegration';
 import IntegrationsManager from '../components/IntegrationsManager';
 import QuizPanel from '../components/QuizPanel';
 import StudyTools from '../components/StudyTools';
+import TeamPanel from '../components/TeamPanel';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -183,7 +184,15 @@ export default function Dashboard() {
         <ul style={styles.list}>
           {projects.map((p) => (
             <li key={p.id} style={p.is_active ? styles.activeItem : styles.item}>
-              <span>{p.name} {p.is_active && "✅ (Active)"}</span>
+              <span>
+                {p.name}{" "}
+                {p.is_active && "✅ "}
+                {p.is_owner ? (
+                  <span style={styles.ownerTag}>👑 Owner</span>
+                ) : (
+                  <span style={styles.sharedTag}>👥 Shared</span>
+                )}
+              </span>
               {!p.is_active && (
                 <button
                   onClick={() => handleSwitchProject(p.id)}
@@ -297,6 +306,11 @@ export default function Dashboard() {
             {/* Study Tools */}
             <StudyTools projectId={activeProject.id} />
 
+            {/* Team Panel — only for projects you own */}
+            {projects.find(p => p.id === activeProject.id && p.is_owner) && (
+              <TeamPanel projectId={activeProject.id} />
+            )}
+
           </div>
         ) : (
           <p style={styles.warning}>⚠️ Please select or create a project first.</p>
@@ -327,5 +341,7 @@ const styles = {
   fileItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'white', marginBottom: '8px', borderRadius: '5px', border: '1px solid #eee' },
   fileStatus: { textAlign: 'right' },
   badge: { marginLeft: '10px', padding: '2px 8px', backgroundColor: '#e0e0e0', borderRadius: '3px', fontSize: '12px' },
-  errorText: { margin: '5px 0 0 0', color: '#dc3545', fontSize: '12px', maxWidth: '400px' }
+  errorText: { margin: '5px 0 0 0', color: '#dc3545', fontSize: '12px', maxWidth: '400px' },
+  ownerTag: { marginLeft: '8px', fontSize: '11px', padding: '2px 8px', backgroundColor: '#fff3e0', color: '#e65100', borderRadius: '10px' },
+  sharedTag: { marginLeft: '8px', fontSize: '11px', padding: '2px 8px', backgroundColor: '#e3f2fd', color: '#1565c0', borderRadius: '10px' }
 };

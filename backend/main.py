@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project, File as FileModel, ChatHistory, Integration, Quiz, QuizAttempt
+from app.models import User, Project, File as FileModel, ChatHistory, Integration, Quiz, QuizAttempt, TeamMember
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token, decode_access_token
 from app.storage import LocalStorage
@@ -51,6 +51,7 @@ from app.integrations.jira import (
     format_issues_for_rag
 )
 import random
+from sqlalchemy import func, cast, Date
 
 
 async def get_valid_jira_token(integration, db):
@@ -102,6 +103,40 @@ async def get_valid_drive_token(integration, db):
     integration.expires_at = now + timedelta(seconds=tokens.get("expires_in", 3600))
     db.commit()
     return integration.access_token
+
+def get_accessible_project(project_id: int, current_user: User, db: Session) -> Project:
+    """Return the project if user owns it OR is a team member. Raises 403 otherwise."""
+    # 1. Fetch the project
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 2. Owner has full access
+    if project.user_id == current_user.id:
+        return project
+    
+    # 3. Check team membership
+    membership = db.query(TeamMember).filter(
+        TeamMember.project_id == project_id,
+        TeamMember.user_id == current_user.id
+    ).first()
+    if membership:
+        return project
+    
+    # 4. Not owner, not member → forbidden
+    raise HTTPException(status_code=403, detail="You don't have access to this project")
+
+
+def require_project_owner(project_id: int, current_user: User, db: Session) -> Project:
+    """Return the project only if current_user owns it. Raises 403 otherwise.
+    Use this for destructive actions (delete, invite, remove members)."""
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or you don't own it")
+    return project
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -228,15 +263,26 @@ def list_projects(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    projects = db.query(Project).filter(Project.user_id == current_user.id).all()
+    # Projects owned by user
+    owned = db.query(Project).filter(Project.user_id == current_user.id).all()
+    
+    # Projects where user is a team member
+    member_projects = db.query(Project).join(
+        TeamMember, TeamMember.project_id == Project.id
+    ).filter(TeamMember.user_id == current_user.id).all()
+    
+    # Combine and deduplicate
+    all_projects = {p.id: p for p in owned + member_projects}.values()
+    
     return [
         {
             "id": p.id,
             "name": p.name,
             "description": p.description,
-            "is_active": (p.id == current_user.active_project_id)
+            "is_active": (p.id == current_user.active_project_id),
+            "is_owner": (p.user_id == current_user.id)
         }
-        for p in projects
+        for p in all_projects
     ]
 
 
@@ -246,12 +292,7 @@ def switch_project(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     current_user.active_project_id = project.id
     db.commit()
     return {"message": f"Switched to project '{project.name}'"}
@@ -276,6 +317,119 @@ def delete_project(
     return {"message": f"Project '{project.name}' deleted"}
 
 
+@app.post("/projects/invite")
+def invite_to_project(
+    project_id: int,
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Invite a user (by email) to a project. Only the owner can invite."""
+    # 1. Only the owner can invite
+    project = require_project_owner(project_id, current_user, db)
+    
+    # 2. Find the user to invite
+    invitee = db.query(User).filter(User.email == email).first()
+    if not invitee:
+        raise HTTPException(status_code=404, detail=f"No user found with email '{email}'. They must sign up first.")
+    
+    # 3. Can't invite yourself
+    if invitee.id == current_user.id:
+        raise HTTPException(status_code=400, detail="You can't invite yourself (you're the owner).")
+    
+    # 4. Check if already a member
+    existing = db.query(TeamMember).filter(
+        TeamMember.project_id == project_id,
+        TeamMember.user_id == invitee.id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"{email} is already a member of this project.")
+    
+    # 5. Create the membership
+    membership = TeamMember(
+        project_id=project_id,
+        user_id=invitee.id,
+        role="member"
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(membership)
+    
+    return {
+        "message": f"Invited {email} to '{project.name}'",
+        "user_id": invitee.id,
+        "name": invitee.name,
+        "role": "member"
+    }
+
+
+@app.get("/projects/members/{project_id}")
+def list_project_members(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all members of a project. Owner OR members can view this list."""
+    # Owner OR member can see members list
+    project = get_accessible_project(project_id, current_user, db)
+    
+    # 1. The owner is always a member
+    owner = db.query(User).filter(User.id == project.user_id).first()
+    members = [{
+        "id": owner.id,
+        "email": owner.email,
+        "name": owner.name,
+        "role": "owner",
+        "invited_at": project.created_at
+    }] if owner else []
+    
+    # 2. Add team members
+    team_rows = db.query(TeamMember, User).join(
+        User, TeamMember.user_id == User.id
+    ).filter(TeamMember.project_id == project_id).all()
+    
+    for tm, u in team_rows:
+        members.append({
+            "id": u.id,
+            "email": u.email,
+            "name": u.name,
+            "role": tm.role,
+            "invited_at": tm.invited_at
+        })
+    
+    return members
+
+
+@app.delete("/projects/remove-member/{project_id}/{user_id}")
+def remove_project_member(
+    project_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a team member. Only the owner can remove."""
+    # 1. Only the owner can remove
+    project = require_project_owner(project_id, current_user, db)
+    
+    # 2. Can't remove yourself (the owner)
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You can't remove yourself — you own this project.")
+    
+    # 3. Find the membership
+    membership = db.query(TeamMember).filter(
+        TeamMember.project_id == project_id,
+        TeamMember.user_id == user_id
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=404, detail="This user is not a member.")
+    
+    # 4. Remove it
+    db.delete(membership)
+    db.commit()
+    
+    return {"message": "Member removed successfully"}
+
+
 # ==========================================
 # Ingestion Endpoints
 # ==========================================
@@ -288,6 +442,9 @@ def ingest_url(
 ):
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # Verify access (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
     
     if "youtube.com" in url or "youtu.be" in url:
         source_type = "youtube"
@@ -325,6 +482,9 @@ def upload_file(
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
     
+    # Verify the user has access to this project (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
+    
     saved_path = storage.save_file(file)
     file_type = file.filename.split('.')[-1].lower()
     
@@ -353,16 +513,12 @@ def list_files(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     
     files = db.query(FileModel).filter(
         FileModel.project_id == project_id
     ).order_by(FileModel.uploaded_at.desc()).all()
+    
     
     return [
         {
@@ -388,12 +544,7 @@ def query(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     
     try:
         results = search(project_id, question, top_k=5, max_distance=2.0)
@@ -442,12 +593,7 @@ async def query_stream(
     db: Session = Depends(get_db)
 ):
     # 1. Verify project ownership
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     
     # 2. Retrieve relevant chunks
     try:
@@ -519,12 +665,7 @@ def get_chat_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     
     history = db.query(ChatHistory).filter(
         ChatHistory.project_id == project_id,
@@ -642,9 +783,14 @@ async def drive_import(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Verify the user has an active project
+        # 1. Verify the user has an active project
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 1b. Verify access (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
+    
+    # 2. Verify the user has an active Drive integration
     
     # 2. Verify the user has an active Drive integration
     integration = db.query(Integration).filter(
@@ -808,8 +954,14 @@ async def notion_import(
 ):
     """Import a Notion page's text content into the RAG pipeline."""
     # 1. Verify active project
+        # 1. Verify active project
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
+    
+    # 1b. Verify access (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
+    
+    # 2. Verify Notion integration
     
     # 2. Verify Notion integration
     integration = db.query(Integration).filter(
@@ -955,8 +1107,14 @@ async def slack_import(
 ):
     """Import all messages from a Slack channel into the RAG pipeline."""
     # 1. Verify active project
+        # 1. Verify active project
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project.")
+    
+    # 1b. Verify access (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
+    
+    # 2. Get the Slack integration
     
     # 2. Get the Slack integration
     integration = db.query(Integration).filter(
@@ -1190,6 +1348,9 @@ async def jira_import(
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
     
+    # Verify access (owner or member)
+    project = get_accessible_project(current_user.active_project_id, current_user, db)
+    
     integration = db.query(Integration).filter(
         Integration.user_id == current_user.id,
         Integration.type == "jira",
@@ -1316,12 +1477,7 @@ async def quiz_generate(
 ):
     """Generate a quiz from a project's content."""
     # 1. Verify project ownership
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = get_accessible_project(project_id, current_user, db)
     
     # 2. Fetch chunks from ChromaDB
     try:
@@ -1446,6 +1602,8 @@ def quiz_history(
     db: Session = Depends(get_db)
 ):
     """Get quiz attempt history for a project."""
+    project = get_accessible_project(project_id, current_user, db)
+    
     attempts = db.query(QuizAttempt).join(Quiz, QuizAttempt.quiz_id == Quiz.id).filter(
         Quiz.project_id == project_id,
         QuizAttempt.user_id == current_user.id
@@ -1475,13 +1633,8 @@ async def study_generate(
     db: Session = Depends(get_db)
 ):
     """Generate study tools (flashcards, summaries, or ELI5 explanations)."""
-    # 1. Verify project ownership
-    project = db.query(Project).filter(
-        Project.id == project_id,
-        Project.user_id == current_user.id
-    ).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    # 1. Verify access (owner or member)
+    project = get_accessible_project(project_id, current_user, db)
     
     # 2. Fetch content from ChromaDB
     try:
@@ -1528,3 +1681,103 @@ async def study_generate(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+    # ==========================================
+# Analytics Endpoints
+# ==========================================
+
+@app.get("/analytics/overview")
+def analytics_overview(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Compute usage analytics for the current user."""
+    
+    # -------- 1. Overview totals --------
+    total_projects = db.query(Project).filter(
+        Project.user_id == current_user.id
+    ).count()
+    
+    total_files = db.query(FileModel).join(
+        Project, FileModel.project_id == Project.id
+    ).filter(Project.user_id == current_user.id).count()
+    
+    total_queries = db.query(ChatHistory).filter(
+        ChatHistory.user_id == current_user.id
+    ).count()
+    
+    total_quiz_attempts = db.query(QuizAttempt).filter(
+        QuizAttempt.user_id == current_user.id
+    ).count()
+    
+    # -------- 2. Per-project breakdown --------
+    projects = db.query(Project).filter(
+        Project.user_id == current_user.id
+    ).all()
+    
+    per_project = []
+    for p in projects:
+        p_files = db.query(FileModel).filter(FileModel.project_id == p.id).count()
+        p_queries = db.query(ChatHistory).filter(ChatHistory.project_id == p.id).count()
+        
+        # Average quiz score for this project
+        attempts = db.query(QuizAttempt).join(
+            Quiz, QuizAttempt.quiz_id == Quiz.id
+        ).filter(Quiz.project_id == p.id, QuizAttempt.user_id == current_user.id).all()
+        
+        if attempts:
+            avg_score = sum(a.score / a.total_questions for a in attempts) / len(attempts)
+        else:
+            avg_score = 0.0
+        
+        per_project.append({
+            "project_id": p.id,
+            "project_name": p.name,
+            "files": p_files,
+            "queries": p_queries,
+            "avg_quiz_score": round(avg_score, 3),
+            "quiz_attempts": len(attempts)
+        })
+    
+    # -------- 3. Queries per day (last 7 days) --------
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    daily = db.query(
+        cast(ChatHistory.created_at, Date).label("day"),
+        func.count(ChatHistory.id).label("count")
+    ).filter(
+        ChatHistory.user_id == current_user.id,
+        ChatHistory.created_at >= seven_days_ago
+    ).group_by("day").order_by("day").all()
+    
+    queries_per_day = [
+        {"date": str(row.day), "count": row.count}
+        for row in daily
+    ]
+    
+    # -------- 4. Top source types --------
+    # Which integration types are contributing to answers
+    source_types = db.query(
+        FileModel.source_type,
+        func.count(FileModel.id).label("count")
+    ).join(
+        Project, FileModel.project_id == Project.id
+    ).filter(
+        Project.user_id == current_user.id
+    ).group_by(FileModel.source_type).all()
+    
+    top_sources = [
+        {"source_type": s.source_type or "file", "count": s.count}
+        for s in source_types
+    ]
+    
+    return {
+        "overview": {
+            "total_projects": total_projects,
+            "total_files": total_files,
+            "total_queries": total_queries,
+            "total_quiz_attempts": total_quiz_attempts
+        },
+        "per_project": per_project,
+        "queries_per_day": queries_per_day,
+        "top_sources": top_sources
+    }
