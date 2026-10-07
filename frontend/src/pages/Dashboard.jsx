@@ -155,7 +155,15 @@ export default function Dashboard() {
       <div style={styles.header}>
         <h2>Dashboard</h2>
         {user && <p>Welcome, <strong>{user.name}</strong>!</p>}
-        <button onClick={handleLogout} style={styles.logoutButton}>Logout</button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button 
+            onClick={() => navigate('/analytics')} 
+            style={{ padding: '8px 15px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+          >
+            📊 Analytics
+          </button>
+          <button onClick={handleLogout} style={styles.logoutButton}>Logout</button>
+        </div>
       </div>
 
       <div style={styles.content}>
