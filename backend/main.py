@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project, File as FileModel, ChatHistory, Integration
+from app.models import User, Project, File as FileModel, ChatHistory, Integration, Quiz, QuizAttempt
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token, decode_access_token
 from app.storage import LocalStorage
@@ -12,8 +12,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from app.vector_store import search
-from app.llm_service import generate_answer, stream_answer_async
+from app.vector_store import search, get_collection
+from app.llm_service import generate_answer, stream_answer_async, generate_quiz
 import json
 import logging
 from datetime import datetime, timedelta
@@ -43,6 +43,7 @@ from app.integrations.jira import (
     search_jira_issues,
     format_issues_for_rag
 )
+import random
 
 async def get_valid_jira_token(integration, db):
     """Returns a valid Jira access token, refreshing if expired."""
@@ -1292,3 +1293,163 @@ def disconnect_integration(
     db.commit()
     
     return {"message": f"Disconnected {integration_type} successfully"}
+
+
+# ==========================================
+# Quiz Endpoints
+# ==========================================
+
+@app.post("/quiz/generate")
+async def quiz_generate(
+    project_id: int,
+    num_questions: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate a quiz from a project's content."""
+    # 1. Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 2. Fetch chunks from ChromaDB
+    try:
+        collection = get_collection(project_id)
+        if collection.count() == 0:
+            raise HTTPException(status_code=400, detail="No content in this project. Please upload files first.")
+        
+        all_data = collection.get()
+        documents = all_data.get("documents") or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch content: {str(e)}")
+    
+    if not documents:
+        raise HTTPException(status_code=400, detail="No content available for quiz generation")
+    
+    # 3. Sample random chunks (up to 10 for variety)
+    sample_size = min(10, len(documents))
+    sampled = random.sample(documents, sample_size)
+    content = "\n\n---\n\n".join(sampled)
+    
+    # 4. Limit total content length to avoid token limits
+    if len(content) > 8000:
+        content = content[:8000]
+    
+    # 5. Generate quiz via LLM
+    try:
+        quiz_data = await generate_quiz(content, num_questions)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quiz generation failed: {str(e)}")
+    
+    # 6. Validate structure
+    if "questions" not in quiz_data or not isinstance(quiz_data["questions"], list):
+        raise HTTPException(status_code=500, detail="LLM returned invalid quiz format")
+    
+    # 7. Save to DB
+    new_quiz = Quiz(
+        user_id=current_user.id,
+        project_id=project_id,
+        title=quiz_data.get("title", "Quiz"),
+        questions=json.dumps(quiz_data["questions"])
+    )
+    db.add(new_quiz)
+    db.commit()
+    db.refresh(new_quiz)
+    
+    return {
+        "quiz_id": new_quiz.id,
+        "title": new_quiz.title,
+        "questions": quiz_data["questions"]
+    }
+
+
+@app.post("/quiz/submit")
+async def quiz_submit(
+    quiz_id: int,
+    answers: str,   # JSON string like "[0, 2, 1, 3, 0]"
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit answers for a quiz and get the score."""
+    # 1. Fetch the quiz
+    quiz = db.query(Quiz).filter(
+        Quiz.id == quiz_id,
+        Quiz.user_id == current_user.id
+    ).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # 2. Parse answers
+    try:
+        user_answers = json.loads(answers)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid answers format")
+    
+    # 3. Parse correct questions
+    questions = json.loads(quiz.questions)
+    if len(user_answers) != len(questions):
+        raise HTTPException(status_code=400, detail="Answers length mismatch")
+    
+    # 4. Score
+    score = 0
+    details = []
+    for i, q in enumerate(questions):
+        is_correct = user_answers[i] == q.get("correct_index")
+        if is_correct:
+            score += 1
+        details.append({
+            "question": q.get("question"),
+            "your_answer": user_answers[i],
+            "correct_index": q.get("correct_index"),
+            "correct_answer": q.get("options", [])[q.get("correct_index", 0)] if q.get("options") else "",
+            "explanation": q.get("explanation", ""),
+            "is_correct": is_correct
+        })
+    
+    # 5. Save attempt
+    attempt = QuizAttempt(
+        quiz_id=quiz_id,
+        user_id=current_user.id,
+        answers=json.dumps(user_answers),
+        score=score,
+        total_questions=len(questions)
+    )
+    db.add(attempt)
+    db.commit()
+    db.refresh(attempt)
+    
+    return {
+        "attempt_id": attempt.id,
+        "score": score,
+        "total_questions": len(questions),
+        "details": details
+    }
+
+
+@app.get("/quiz/history/{project_id}")
+def quiz_history(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get quiz attempt history for a project."""
+    attempts = db.query(QuizAttempt).join(Quiz, QuizAttempt.quiz_id == Quiz.id).filter(
+        Quiz.project_id == project_id,
+        QuizAttempt.user_id == current_user.id
+    ).order_by(QuizAttempt.completed_at.desc()).all()
+    
+    return [
+        {
+            "attempt_id": a.id,
+            "quiz_id": a.quiz_id,
+            "score": a.score,
+            "total_questions": a.total_questions,
+            "completed_at": a.completed_at
+        }
+        for a in attempts
+    ]

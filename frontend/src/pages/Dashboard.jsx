@@ -8,6 +8,7 @@ import NotionIntegration from '../components/NotionIntegration';
 import SlackIntegration from '../components/SlackIntegration';
 import JiraIntegration from '../components/JiraIntegration';
 import IntegrationsManager from '../components/IntegrationsManager';
+import QuizPanel from '../components/QuizPanel';
 
 export default function Dashboard() {
   const { logout } = useAuth();
@@ -277,6 +278,13 @@ export default function Dashboard() {
 
             {/* Chat Panel - NEW */}
             <ChatPanel projectId={activeProject.id} />
+
+            {/* Chat Panel */}
+            <ChatPanel projectId={activeProject.id} />
+
+            {/* Quiz Panel */}
+            <QuizPanel projectId={activeProject.id} />
+
           </div>
         ) : (
           <p style={styles.warning}>⚠️ Please select or create a project first.</p>

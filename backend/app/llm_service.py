@@ -3,6 +3,7 @@ import asyncio
 import logging
 from groq import Groq, AsyncGroq
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -96,3 +97,42 @@ Answer:"""
     # All retries exhausted
     logger.error(f"[LLM] All {max_retries} attempts failed. Last error: {str(last_error)}")
     raise Exception(f"AI service unavailable after {max_retries} attempts. Please try again in a moment.")
+
+async def generate_quiz(content: str, num_questions: int = 5) -> dict:
+    """Generate a multiple-choice quiz from the given content.
+    Returns a dict: {"title": ..., "questions": [{...}, ...]}
+    """
+    prompt = f"""You are a quiz generator. Based on the content below, generate exactly {num_questions} multiple-choice questions.
+
+Return ONLY a valid JSON object with this exact structure:
+{{
+  "title": "A short quiz title (max 8 words)",
+  "questions": [
+    {{
+      "question": "The question text",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correct_index": 0,
+      "explanation": "Why this answer is correct (1-2 sentences)"
+    }}
+  ]
+}}
+
+Rules:
+- Each question MUST have exactly 4 options.
+- "correct_index" must be 0, 1, 2, or 3.
+- Make questions from the content only. Do not invent facts.
+- Return exactly {num_questions} questions.
+
+Content:
+{content}
+"""
+    
+    response = await async_groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5,
+        response_format={"type": "json_object"}
+    )
+    
+    raw = response.choices[0].message.content
+    return json.loads(raw)

@@ -60,3 +60,23 @@ class Integration(Base):
     expires_at = Column(DateTime, nullable=True)
     status = Column(String, default="active")      # "active", "expired", "disconnected"
     connected_at = Column(DateTime, server_default=func.now())
+
+class Quiz(Base):
+    __tablename__ = "quizzes"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    title = Column(String, nullable=False)
+    questions = Column(Text, nullable=False)   # JSON string of the full questions list
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+    id = Column(Integer, primary_key=True)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    answers = Column(Text, nullable=False)      # JSON string of user's answer indices
+    score = Column(Integer, nullable=False)
+    total_questions = Column(Integer, nullable=False)
+    completed_at = Column(DateTime, server_default=func.now())
