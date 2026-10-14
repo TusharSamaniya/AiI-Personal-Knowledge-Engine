@@ -274,16 +274,24 @@ def list_projects(
     # Combine and deduplicate
     all_projects = {p.id: p for p in owned + member_projects}.values()
     
-    return [
-        {
+    result = []
+    for p in all_projects:
+        member_count = db.query(TeamMember).filter(TeamMember.project_id == p.id).count()
+        owner = None
+        if p.user_id != current_user.id:
+            owner = db.query(User).filter(User.id == p.user_id).first()
+        
+        result.append({
             "id": p.id,
             "name": p.name,
             "description": p.description,
             "is_active": (p.id == current_user.active_project_id),
-            "is_owner": (p.user_id == current_user.id)
-        }
-        for p in all_projects
-    ]
+            "is_owner": (p.user_id == current_user.id),
+            "member_count": member_count,
+            "owner_name": owner.name if owner else None,
+        })
+    
+    return result
 
 
 @app.post("/projects/switch/{project_id}")
