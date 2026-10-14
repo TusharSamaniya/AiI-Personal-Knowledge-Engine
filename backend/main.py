@@ -248,7 +248,7 @@ def update_user(name: str, current_user: User = Depends(get_current_user), db: S
 def create_project(
     name: str,
     description: str = "",
-    current_user: User = Depends(require_role(["teacher", "admin"])),
+    current_user: User = Depends(get_current_user),   
     db: Session = Depends(get_db)
 ):
     new_project = Project(user_id=current_user.id, name=name, description=description)
