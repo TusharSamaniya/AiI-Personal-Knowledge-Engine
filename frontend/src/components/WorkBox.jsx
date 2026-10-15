@@ -20,7 +20,7 @@ export default function WorkBox({ projectId }) {
       className={
         expanded
           ? 'fixed inset-0 z-40 bg-white flex flex-col'
-          : 'mt-6 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col h-[600px]'
+          : 'mt-6 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col h-[400px]'
       }
     >
       {/* Tab Bar */}

@@ -24,7 +24,7 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen w-full overflow-hidden bg-gray-50">
       <Sidebar projects={projects} onRefresh={refreshProjects} />
-      <MainArea activeProject={activeProject} />
+      <MainArea activeProject={activeProject} onRefresh={refreshProjects} />
     </div>
   );
 }

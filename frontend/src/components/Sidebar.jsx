@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import api from '../api/axios';
 
 export default function Sidebar({ projects, onRefresh }) {
@@ -75,7 +75,7 @@ export default function Sidebar({ projects, onRefresh }) {
         <CreateTeamModal
           mode={createMode}
           onClose={() => { setShowCreateModal(false); setCreateMode(null); }}
-          onCreated={fetchProjects}
+          onCreated={onRefresh}
         />
       )}
     </aside>
@@ -100,12 +100,21 @@ function ProjectItem({ project, onRefresh }) {
   };
 
   const handleRemove = async () => {
-    if (!window.confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
+    const confirmMsg = project.is_owner
+      ? `Delete "${project.name}"? This cannot be undone.`
+      : `Leave "${project.name}"? You'll lose access until re-invited.`;
+    
+    if (!window.confirm(confirmMsg)) return;
+    
     try {
-      await api.delete(`/projects/delete/${project.id}`);
+      if (project.is_owner) {
+        await api.delete(`/projects/delete/${project.id}`);
+      } else {
+        await api.post(`/projects/leave/${project.id}`);
+      }
       onRefresh();
     } catch (err) {
-      alert('Failed to delete project.');
+      alert(err.response?.data?.detail || 'Failed to remove project.');
     }
     setMenuOpen(false);
   };
@@ -150,14 +159,12 @@ function ProjectItem({ project, onRefresh }) {
                 🔄 Switch
               </button>
             )}
-            {project.is_owner && (
-              <button
-                onClick={handleRemove}
-                className="w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-              >
-                🗑️ Remove
-              </button>
-            )}
+            <button
+              onClick={handleRemove}
+              className="w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+            >
+              {project.is_owner ? '🗑️ Remove' : '🚪 Leave Team'}
+            </button>
           </div>
         </>
       )}
@@ -166,7 +173,7 @@ function ProjectItem({ project, onRefresh }) {
 }
 
 // ============================================
-// Create Team Modal
+// Create Team / Personal Chat Modal
 // ============================================
 function CreateTeamModal({ mode, onClose, onCreated }) {
   const isPersonal = mode === 'personal';

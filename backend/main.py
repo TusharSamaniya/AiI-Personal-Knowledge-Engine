@@ -466,6 +466,35 @@ def remove_project_member(
     return {"message": "Member removed successfully"}
 
 
+@app.post("/projects/leave/{project_id}")
+def leave_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Leave a team project you were invited to (as a member)."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if project.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You own this project — use Remove instead.")
+    
+    membership = db.query(TeamMember).filter(
+        TeamMember.project_id == project_id,
+        TeamMember.user_id == current_user.id
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=404, detail="You are not a member of this project")
+    
+    db.delete(membership)
+    if current_user.active_project_id == project_id:
+        current_user.active_project_id = None
+    db.commit()
+    
+    return {"message": f"Left project '{project.name}'"}
+
+
 # ==========================================
 # Ingestion Endpoints
 # ==========================================
