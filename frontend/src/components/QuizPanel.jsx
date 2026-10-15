@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import api from '../api/axios';
 
-export default function QuizPanel({ projectId }) {
+export default function QuizPanel({ projectId, bare = false }) {
   const [phase, setPhase] = useState('idle'); // 'idle' | 'taking' | 'results'
   const [numQuestions, setNumQuestions] = useState(5);
   const [quiz, setQuiz] = useState(null);
@@ -74,7 +74,7 @@ export default function QuizPanel({ projectId }) {
   // ===== RENDER =====
   return (
     <div style={styles.container}>
-      <h4 style={styles.title}>📝 Quiz Yourself</h4>
+      {!bare && <h4 style={styles.title}>📝 Quiz Yourself</h4>}
 
       {phase === 'idle' && (
         <>

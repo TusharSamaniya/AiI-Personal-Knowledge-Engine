@@ -1,23 +1,9 @@
 import { useState, useEffect } from 'react';
 import api from '../api/axios';
 
-export default function Sidebar() {
-  const [projects, setProjects] = useState([]);
+export default function Sidebar({ projects, onRefresh }) {
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createMode, setCreateMode] = useState(null); // 'team' | 'personal'
-
-  const fetchProjects = async () => {
-    try {
-      const res = await api.get('/projects/list');
-      setProjects(res.data);
-    } catch (err) {
-      console.error('Failed to load projects', err);
-    }
-  };
-
-  useEffect(() => {
-    fetchProjects();
-  }, []);
+  const [createMode, setCreateMode] = useState(null);
 
   // Split projects: team = has members OR you're not the owner
   const teamProjects = projects.filter(p => p.member_count > 0 || !p.is_owner);
@@ -44,7 +30,7 @@ export default function Sidebar() {
         ) : (
           <ul className="space-y-0.5">
             {teamProjects.map(p => (
-              <ProjectItem key={p.id} project={p} onRefresh={fetchProjects} />
+              <ProjectItem key={p.id} project={p} onRefresh={onRefresh} />
             ))}
           </ul>
         )}
@@ -69,7 +55,7 @@ export default function Sidebar() {
         ) : (
           <ul className="space-y-0.5">
             {personalProjects.map(p => (
-              <ProjectItem key={p.id} project={p} onRefresh={fetchProjects} />
+              <ProjectItem key={p.id} project={p} onRefresh={onRefresh} />
             ))}
           </ul>
         )}

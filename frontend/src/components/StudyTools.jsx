@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import api from '../api/axios';
 
-export default function StudyTools({ projectId }) {
-  const [tab, setTab] = useState('flashcards'); // 'flashcards' | 'summary' | 'eli5'
+export default function StudyTools({ projectId, initialTab = 'flashcards', hideTabs = false }) {
+  const [tab, setTab] = useState(initialTab);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -69,29 +69,31 @@ export default function StudyTools({ projectId }) {
 
   return (
     <div style={styles.container}>
-      <h4 style={styles.title}>📚 Study Tools</h4>
-
-      {/* Tab Bar */}
-      <div style={styles.tabBar}>
-        <button
-          onClick={() => setTab('flashcards')}
-          style={tab === 'flashcards' ? styles.tabActive : styles.tabInactive}
-        >
-          📇 Flashcards
-        </button>
-        <button
-          onClick={() => setTab('summary')}
-          style={tab === 'summary' ? styles.tabActive : styles.tabInactive}
-        >
-          📄 Summary
-        </button>
-        <button
-          onClick={() => setTab('eli5')}
-          style={tab === 'eli5' ? styles.tabActive : styles.tabInactive}
-        >
-          👶 ELI5
-        </button>
-      </div>
+            {!hideTabs && (
+        <>
+          <h4 style={styles.title}>📚 Study Tools</h4>
+          <div style={styles.tabBar}>
+            <button
+              onClick={() => setTab('flashcards')}
+              style={tab === 'flashcards' ? styles.tabActive : styles.tabInactive}
+            >
+              📇 Flashcards
+            </button>
+            <button
+              onClick={() => setTab('summary')}
+              style={tab === 'summary' ? styles.tabActive : styles.tabInactive}
+            >
+              📄 Summary
+            </button>
+            <button
+              onClick={() => setTab('eli5')}
+              style={tab === 'eli5' ? styles.tabActive : styles.tabInactive}
+            >
+              👶 ELI5
+            </button>
+          </div>
+        </>
+      )}
 
       {message && <p style={styles.message}>{message}</p>}
 

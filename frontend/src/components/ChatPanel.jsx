@@ -3,7 +3,7 @@ import api from '../api/axios';
 
 const API_BASE = 'http://localhost:8000';
 
-export default function ChatPanel({ projectId }) {
+export default function ChatPanel({ projectId, bare = false }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -130,7 +130,7 @@ export default function ChatPanel({ projectId }) {
 
   return (
     <div style={styles.container}>
-      <h3 style={styles.title}>💬 Ask questions about your files</h3>
+      {!bare && <h3 style={styles.title}>💬 Ask questions about your files</h3>}
 
       <div style={styles.messages}>
         {messages.length === 0 && (
