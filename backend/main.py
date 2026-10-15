@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Project, File as FileModel, ChatHistory, Integration, Quiz, QuizAttempt, TeamMember
+from app.models import User, Project, File as FileModel, ChatHistory, Integration, Quiz, QuizAttempt, TeamMember, Chunk
 from app.auth import hash_password, verify_password, get_current_user, require_role
 from app.jwt_handler import create_access_token, decode_access_token
 from app.storage import LocalStorage
@@ -317,11 +317,39 @@ def delete_project(
         Project.user_id == current_user.id
     ).first()
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail="Project not found or you don't own it")
+    
+    # If this is the user's active project, clear it first
     if current_user.active_project_id == project.id:
         current_user.active_project_id = None
+    
+    # Delete related records (in dependency order)
+    # 1. Quiz attempts → linked to quizzes
+    quiz_ids = [q.id for q in db.query(Quiz).filter(Quiz.project_id == project_id).all()]
+    if quiz_ids:
+        db.query(QuizAttempt).filter(QuizAttempt.quiz_id.in_(quiz_ids)).delete(synchronize_session=False)
+    
+    # 2. Quizzes
+    db.query(Quiz).filter(Quiz.project_id == project_id).delete(synchronize_session=False)
+    
+    # 3. Chat history
+    db.query(ChatHistory).filter(ChatHistory.project_id == project_id).delete(synchronize_session=False)
+    
+    # 4. Chunks (need file_ids first)
+    file_ids = [f.id for f in db.query(FileModel).filter(FileModel.project_id == project_id).all()]
+    if file_ids:
+        db.query(Chunk).filter(Chunk.file_id.in_(file_ids)).delete(synchronize_session=False)
+    
+    # 5. Files
+    db.query(FileModel).filter(FileModel.project_id == project_id).delete(synchronize_session=False)
+    
+    # 6. Team members
+    db.query(TeamMember).filter(TeamMember.project_id == project_id).delete(synchronize_session=False)
+    
+    # 7. Finally, the project
     db.delete(project)
     db.commit()
+    
     return {"message": f"Project '{project.name}' deleted"}
 
 
