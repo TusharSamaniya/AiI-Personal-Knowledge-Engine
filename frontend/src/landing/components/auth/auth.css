@@ -1,0 +1,98 @@
+/* ================= Auth screen (login / sign-up) ================= */
+.am {
+  position: fixed; inset: 0; z-index: 1000; overflow: hidden;
+  background: #faf9f6; color: #000;
+  font-family: "Inter", var(--font-body, sans-serif);
+  animation: am-in .3s ease;
+}
+@keyframes am-in { from { opacity: 0; } to { opacity: 1; } }
+
+.am__close {
+  position: absolute; top: 18px; right: 22px; z-index: 5;
+  width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
+  border: 2px solid #ddd; background: #fff; color: #000;
+  font: 300 26px/1 sans-serif; display: flex; align-items: center; justify-content: center;
+  transition: border-color .2s, transform .2s;
+}
+.am__close:hover:not(:disabled) { border-color: #000; transform: rotate(90deg); }
+
+/* ---- header: title, google, divider, status ---- */
+.am__head {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 4;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 24px 20px 0; pointer-events: none;
+}
+.am__head > * { pointer-events: auto; }
+.am__title { font: 700 26px/1.2 "Inter", sans-serif; letter-spacing: -0.02em; }
+.am__switch { margin-top: 6px; font-size: 14px; color: #555; }
+.am__switch button {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: 600 14px "Inter", sans-serif; color: #4f46e5;
+}
+.am__switch button:hover:not(:disabled) { text-decoration: underline; }
+
+.am__google {
+  margin-top: 16px; width: 270px; height: 42px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: #fff; color: #000; border: 2px solid #ddd; cursor: pointer;
+  font: 500 15px "Inter", sans-serif; transition: border-color .2s, background .2s;
+}
+.am__google:hover:not(:disabled) { border-color: #000; }
+.am__google:disabled { opacity: .6; cursor: default; }
+
+.am__or {
+  width: 270px; margin-top: 10px; display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: #888; text-transform: lowercase;
+}
+.am__or::before, .am__or::after { content: ""; flex: 1; height: 1px; background: #ddd; }
+.am__status { min-height: 20px; margin-top: 6px; font-size: 13px; color: #555; max-width: 320px; }
+.am__status--error { color: #c62828; }
+.am__status--ok { color: #15803d; }
+
+/* ---- machine layout (same geometry as the original project) ---- */
+.am-container { position: absolute; left: 50%; }
+.am-svg, .am-form { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.am-svg {
+  width: 1000px; pointer-events: none;
+  stroke-width: 1.2px; stroke: #000; fill: none;
+}
+.am-form { width: 270px; }
+
+.am-row { width: 100%; height: 60px; display: flex; align-items: center; justify-content: flex-start; position: relative; }
+.am-row input[type="email"], .am-row input[type="text"], .am-row input[type="password"] {
+  width: 100%; height: 38px; margin: 0; padding: 5px 10px;
+  outline: none; border: 2px solid #ddd; border-radius: 0; background: #fff;
+  font: 15px "Inter", sans-serif; color: #000; transition: border-color .2s;
+}
+.am-row input::placeholder { color: #999; font-size: 14px; }
+.am-row input:focus { border-color: #999; }
+.am-row input.valid { border-color: #000; }
+.am-row--pw input { padding-right: 52px; }
+.am-pw-toggle {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; cursor: pointer; font: 12px "Inter", sans-serif; color: #666;
+}
+.am-pw-toggle:hover { color: #000; }
+
+.am-row--check { cursor: pointer; font-size: 13px; line-height: 1.3; }
+.am-row--check .am-checkbox {
+  flex: none; width: 20px; height: 20px; margin: 0 10px 0 0; padding: 0; accent-color: #000; cursor: pointer;
+}
+
+.am-submit {
+  width: 100%; height: 40px; cursor: pointer; border: none; border-radius: 0;
+  background: #eee; font: 15px "Inter", sans-serif;
+}
+.am-submit:hover:not(:disabled) { background: #ddd; }
+.am-submit:disabled { cursor: default; }
+
+/* ---- phones: normal form, no machine ---- */
+.am--plain { overflow-y: auto; }
+.am--plain .am__head { position: static; padding-top: 70px; }
+.am--plain .am-container { position: static; width: 270px; margin: 6px auto 40px; }
+.am--plain .am-form { position: static; transform: none; width: 100%; }
+.am--plain .am-submit { background: #000; color: #fff; font-weight: 600; }
+.am--plain .am-submit:hover:not(:disabled) { background: #222; }
+.am--plain .am-submit:disabled { opacity: .6; }
+
+@media (prefers-reduced-motion: reduce) { .am { animation: none; } }
