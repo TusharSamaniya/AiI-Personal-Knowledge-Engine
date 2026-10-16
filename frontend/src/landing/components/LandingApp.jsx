@@ -1,25 +1,23 @@
 import { useEffect } from "react";
-import Navbar from "./landing/components/Navbar.jsx";
-import Hero from "./landing/components/Hero.jsx";
-import Integrations from "./landing/components/Integrations.jsx";
-import Features from "./landing/components/Features.jsx";
-import HowItWorks from "./landing/components/HowItWorks.jsx";
-import Journey from "./landing/components/Journey.jsx";
-import Faq from "./landing/components/Faq.jsx";
-import Footer from "./landing/components/Footer.jsx";
-import AuthPage from "./landing/components/auth/AuthPage.jsx";
-import SolutionsPage from "./landing/pages/SolutionsPage.jsx";
-import ContactPage from "./landing/pages/ContactPage.jsx";
-import { useHash } from "./landing/lib/useHash.js";
-import './styles.css';
+import Navbar       from "./Navbar.jsx";
+import Hero         from "./Hero.jsx";
+import Integrations from "./Integrations.jsx";
+import Features     from "./Features.jsx";
+import HowItWorks   from "./HowItWorks.jsx";
+import Journey      from "./Journey.jsx";
+import Faq          from "./Faq.jsx";
+import Footer       from "./Footer.jsx";
+import AuthPage     from "./auth/AuthPage.jsx";
+import SolutionsPage from "../pages/SolutionsPage.jsx";
+import ContactPage   from "../pages/ContactPage.jsx";
+import { useHash }   from "../lib/useHash.js";
+import "../styles.css";
 
-export default function App() {
-  const hash = useHash();
+export default function LandingApp() {
+  const hash       = useHash();
   const onSolutions = hash === "#solutions";
-  const onContact = hash === "#connect";
+  const onContact   = hash === "#connect";
 
-  // The site uses hash links (no router): "#solutions" shows the Solutions page,
-  // every other hash shows the home page and scrolls to that section.
   useEffect(() => {
     if (onSolutions || onContact) {
       window.scrollTo({ top: 0, behavior: "instant" });
@@ -35,13 +33,9 @@ export default function App() {
     <>
       <Navbar />
       {onSolutions ? (
-        <main>
-          <SolutionsPage />
-        </main>
+        <main><SolutionsPage /></main>
       ) : onContact ? (
-        <main>
-          <ContactPage />
-        </main>
+        <main><ContactPage /></main>
       ) : (
         <main>
           <Hero />

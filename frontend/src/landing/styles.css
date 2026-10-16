@@ -669,3 +669,6 @@ ul { list-style: none; }
 .navbar.navbar--sol .btn--light { background: #0b0d12; color: #fff; }
 .navbar.navbar--sol .btn--light:hover { background: #262a35; }
 .navbar.navbar--sol .btn--ghost { color: #0b0d12; border-color: rgba(11,13,18,.3); }
+
+@import "./styles_patch.css";
+

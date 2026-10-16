@@ -1,19 +1,16 @@
 /* ------------------------------------------------------------------ *
- *  Auth API layer – the ONLY place that talks to your backend.
+ *  Auth API layer – talks to the FastAPI backend.
  *
- *  Set VITE_API_URL in .env (see .env.example) and implement:
+ *  Backend endpoints:
+ *    POST /auth/register?email=&password=&name=   → { message, user_id }
+ *    POST /auth/login?email=&password=            → { access_token, token_type }
+ *    GET  /user/me  (Bearer token)                → { id, email, name, ... }
  *
- *    POST {API}/auth/signup   body: { email, password }
- *    POST {API}/auth/login    body: { email, password }
- *    POST {API}/auth/google   body: { code }            (OAuth2 auth-code flow, redirect_uri "postmessage")
+ *  Google OAuth uses a backend redirect flow (not auth-code popup):
+ *    GET /auth/google  → Google → GET /auth/google/callback → redirect to
+ *    http://localhost:5173/auth/callback?token=<jwt>
  *
- *  Every endpoint should answer with:
- *    { token: "<jwt or session id>", user: { name?, email, picture? } }
- *  and on failure a non-2xx status with { message: "..." }.
- *
- *  DEMO MODE: while VITE_API_URL is empty, no request is sent and any
- *  well-formed credentials "succeed". It exists only so you can develop the
- *  UI – never ship it.
+ *  DEMO MODE: when VITE_API_URL is empty, no requests are sent.
  * ------------------------------------------------------------------ */
 
 const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
@@ -22,28 +19,39 @@ export const isDemoMode = !API;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const nameFromEmail = (email) => email.split("@")[0];
 
-async function post(path, body) {
+/* Fetch user profile from backend using a token */
+async function fetchUserProfile(token) {
+  try {
+    const res = await fetch(`${API}/user/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return await res.json(); // { id, email, name, oauth_provider, active_project_id }
+  } catch {
+    return null;
+  }
+}
+
+export async function signupWithEmail({ email, password, name }) {
+  if (isDemoMode) {
+    await wait(600);
+    const fakeName = name || nameFromEmail(email);
+    return { token: "demo-token", user: { name: fakeName, email } };
+  }
+
+  // Step 1: register the user (returns { message, user_id } — no token)
+  const registerUrl = `${API}/auth/register?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}&name=${encodeURIComponent(name || nameFromEmail(email))}`;
   let res;
   try {
-    res = await fetch(`${API}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    res = await fetch(registerUrl, { method: "POST" });
   } catch {
     throw new Error("Can't reach the server. Please check your connection and try again.");
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.detail || "Something went wrong. Please try again.");
-  return data;
-}
+  const registerData = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(registerData.detail || registerData.message || "Registration failed.");
 
-export async function signupWithEmail({ email, password }) {
-  if (isDemoMode) {
-    await wait(600);
-    return { token: "demo-token", user: { name: nameFromEmail(email), email } };
-  }
-  return post("/auth/signup", { email, password });
+  // Step 2: immediately log them in to get a token
+  return loginWithEmail({ email, password });
 }
 
 export async function loginWithEmail({ email, password }) {
@@ -51,14 +59,44 @@ export async function loginWithEmail({ email, password }) {
     await wait(600);
     return { token: "demo-token", user: { name: nameFromEmail(email), email } };
   }
-  return post("/auth/login", { email, password });
+
+  const loginUrl = `${API}/auth/login?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`;
+  let res;
+  try {
+    res = await fetch(loginUrl, { method: "POST" });
+  } catch {
+    throw new Error("Can't reach the server. Please check your connection and try again.");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || "Invalid email or password.");
+
+  const token = data.access_token;
+  if (!token) throw new Error("No token received from server.");
+
+  // Fetch the user profile so we have the name for the Navbar
+  const profile = await fetchUserProfile(token);
+  const user = profile
+    ? { name: profile.name || nameFromEmail(email), email: profile.email }
+    : { name: nameFromEmail(email), email };
+
+  return { token, user };
 }
 
-/** `response` is what @react-oauth/google gives us: { code } (auth-code flow) or { access_token } (demo / implicit flow) */
+/**
+ * Google OAuth uses the backend redirect flow, NOT the popup flow.
+ * Clicking "Continue with Google" redirects to GET /auth/google,
+ * which bounces through Google and lands on /auth/callback?token=xxx.
+ * AuthCallback.jsx handles saving the token and redirecting to /dashboard.
+ *
+ * This function is only used in DEMO MODE (no backend).
+ */
 export async function loginWithGoogle(response) {
-  if (!isDemoMode) return post("/auth/google", { code: response.code });
+  if (!isDemoMode) {
+    // Should not be called in production — Google button redirects via backend instead
+    throw new Error("Use the backend Google OAuth redirect flow.");
+  }
 
-  // demo: read the profile straight from Google with the access token
+  // Demo mode: read the profile straight from Google with the access token
   const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
     headers: { Authorization: `Bearer ${response.access_token}` },
   });

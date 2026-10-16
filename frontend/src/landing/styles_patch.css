@@ -1,0 +1,21 @@
+/* ── Patch: Work link button in Navbar (added during integration) ── */
+.navbar__links .navbar__work-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink-soft);
+  transition: color .2s;
+}
+.navbar__links .navbar__work-link:hover {
+  color: #000;
+}
+.navbar--sol .navbar__links .navbar__work-link {
+  color: var(--ink-soft);
+}
+.navbar--sol .navbar__links .navbar__work-link:hover {
+  color: #0b0d12;
+}
