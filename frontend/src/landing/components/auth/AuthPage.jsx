@@ -1,15 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { isDemoMode, loginWithEmail, loginWithGoogle, signupWithEmail } from "../../lib/authApi.js";
-import { createAuthMachine } from "./machine.js";
-import { MACHINE_SVG } from "./machineSvg.js";
 import "./auth.css";
 
 const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const PASSWORD_MIN = 8;
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-const PLAIN_QUERY = "(max-width: 719px)";
 
 /* ---------------------------- Google button ---------------------------- */
 function GoogleLogo() {
@@ -88,18 +85,6 @@ function DemoGoogleInner({ useGoogleLogin, disabled, onResponse, onFail }) {
   );
 }
 
-/* ------------------------------- helpers ------------------------------- */
-function useMediaQuery(query) {
-  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const on = () => setMatches(mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, [query]);
-  return matches;
-}
-
 /* -------------------------------- screen -------------------------------- */
 export default function AuthPage() {
   const { authMode, closeAuth, setSession } = useAuth();
@@ -114,10 +99,6 @@ export default function AuthPage() {
   const [error,    setError]   = useState("");
   const [busy,     setBusy]    = useState(false);
 
-  const machine  = useRef(null);
-  const rootRef  = useRef(null);
-  const isPlain  = useMediaQuery(PLAIN_QUERY);
-
   // Sync mode from context
   useEffect(() => {
     if (authMode) setMode(authMode);
@@ -130,25 +111,27 @@ export default function AuthPage() {
     }
   }, [open]);
 
-  // Init machine animation
-  useLayoutEffect(() => {
-    if (isPlain || !rootRef.current) return;
-    machine.current = createAuthMachine(rootRef.current);
-    return () => machine.current?.destroy?.();
-  }, [isPlain]);
-
-  // Drive machine with form validity
+  // Close on Escape + lock page scroll while the dialog is open
   useEffect(() => {
-    if (!machine.current) return;
-    const emailOk = EMAIL_RE.test(email);
-    const passOk  = password.length >= PASSWORD_MIN;
-    machine.current.setEmailValid?.(emailOk);
-    machine.current.setPasswordValid?.(passOk);
-  }, [email, password]);
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && closeAuth();
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, closeAuth]);
 
   async function submit(e) {
     e.preventDefault();
     setError("");
+    if (mode === "signup" && !name.trim()) return setError("Please enter your name.");
+    if (!EMAIL_RE.test(email)) return setError("Please enter a valid email address.");
+    if (mode === "signup" && password.length < PASSWORD_MIN)
+      return setError(`Password must be at least ${PASSWORD_MIN} characters.`);
+    if (!password) return setError("Please enter your password.");
     setBusy(true);
     try {
       const fn = mode === "signup" ? signupWithEmail : loginWithEmail;
@@ -179,24 +162,19 @@ export default function AuthPage() {
   return (
     <div className="am__overlay" onClick={(e) => e.target === e.currentTarget && closeAuth()}>
       <div className="am__dialog" role="dialog" aria-modal="true">
-        {!isPlain && (
-          <div
-            className="am__machine"
-            ref={rootRef}
-            dangerouslySetInnerHTML={{ __html: MACHINE_SVG }}
-          />
-        )}
         <div className="am__form-side">
-          <button className="am__close" aria-label="Close" onClick={closeAuth}>✕</button>
+          <button type="button" className="am__close" aria-label="Close" onClick={closeAuth}>✕</button>
 
           <div className="am__tabs">
             <button
+              type="button"
               className={`am__tab ${mode === "login" ? "is-active" : ""}`}
               onClick={() => { setMode("login"); setError(""); }}
             >
               Log in
             </button>
             <button
+              type="button"
               className={`am__tab ${mode === "signup" ? "is-active" : ""}`}
               onClick={() => { setMode("signup"); setError(""); }}
             >

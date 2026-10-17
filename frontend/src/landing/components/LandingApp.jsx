@@ -30,7 +30,7 @@ export default function LandingApp() {
   }, [hash, onSolutions, onContact]);
 
   return (
-    <>
+    <div className="landing-root">
       <Navbar />
       {onSolutions ? (
         <main><SolutionsPage /></main>
@@ -48,6 +48,6 @@ export default function LandingApp() {
       )}
       <Footer />
       <AuthPage />
-    </>
+    </div>
   );
 }

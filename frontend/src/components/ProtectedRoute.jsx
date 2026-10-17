@@ -1,14 +1,15 @@
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 
+/**
+ * Reads the token straight from localStorage so a login done from the
+ * landing-page modal (which writes localStorage but not the dashboard
+ * context state) is recognised immediately.
+ */
 export default function ProtectedRoute({ children }) {
-  const { token } = useAuth();
+  const token = localStorage.getItem('token');
 
   if (!token) {
-    // If no token, redirect to login page
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/" replace />;
   }
-
-  // If token exists, show the page (children)
   return children;
 }
