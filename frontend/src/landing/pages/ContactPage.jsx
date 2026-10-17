@@ -12,9 +12,11 @@ const PHONE = "+91 8882418916";
 const LINKEDIN = "https://www.linkedin.com/in/tushar-samaniya-4b69b1290/";
 const GITHUB = "https://github.com/TusharSamaniya";
 
-// Optional: set VITE_CONTACT_ENDPOINT (e.g. a Formspree URL) to POST the form as JSON.
-// If it is empty, "Send Message" opens the visitor's mail app addressed to EMAIL.
-const ENDPOINT = import.meta.env.VITE_CONTACT_ENDPOINT || "";
+// The form POSTs JSON to your FastAPI backend (POST /contact), which emails you.
+// Override with VITE_CONTACT_ENDPOINT if needed. If no backend URL is configured at all,
+// "Send Message" falls back to opening the visitor's mail app addressed to EMAIL.
+const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const ENDPOINT = import.meta.env.VITE_CONTACT_ENDPOINT || (API ? `${API}/contact` : "");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -201,13 +203,26 @@ function ContactMe() {
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ email: em, subject: sub, message: msg }),
         });
-        if (!res.ok) throw new Error("Request failed");
+        if (!res.ok) {
+          let detail = "";
+          try {
+            const data = await res.json();
+            detail = typeof data.detail === "string" ? data.detail : "";
+          } catch {
+            /* non-JSON error body */
+          }
+          throw new Error(detail || "Request failed");
+        }
         setStatus({ type: "ok", text: "Thanks! Your message has been sent." });
         setEmail("");
         setSubject("");
         setMessage("");
-      } catch {
-        setStatus({ type: "err", text: "Sorry, the message could not be sent. Please try again." });
+      } catch (err) {
+        const known = err instanceof TypeError ? "" : err.message; // TypeError = network/CORS failure
+        setStatus({
+          type: "err",
+          text: known && known !== "Request failed" ? known : "Sorry, the message could not be sent. Please try again.",
+        });
       } finally {
         setSending(false);
       }

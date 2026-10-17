@@ -9,18 +9,20 @@
 
 /* Scoped to .landing-root so these resets do NOT leak into the dashboard.
    (Un-layered global resets beat Tailwind v4's layered utilities, which
-   wiped out every p-*, m-* class and changed the dashboard font.) */
+   wiped out every p-*, m-* class and changed the dashboard font.)
+   :where() keeps specificity at 0 so component classes (e.g. the auth modal)
+   always override these resets regardless of CSS load order. */
 html { scroll-behavior: smooth; }
-.landing-root, .landing-root * { box-sizing: border-box; margin: 0; padding: 0; }
+:where(.landing-root, .landing-root *) { box-sizing: border-box; margin: 0; padding: 0; }
 .landing-root {
   font-family: var(--font-body);
   background: var(--bg);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
-.landing-root a { color: inherit; text-decoration: none; }
-.landing-root ul { list-style: none; }
-.landing-root :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:where(.landing-root a) { color: inherit; text-decoration: none; }
+:where(.landing-root ul) { list-style: none; }
+:where(.landing-root) :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* ---------- Buttons ---------- */
 .btn {

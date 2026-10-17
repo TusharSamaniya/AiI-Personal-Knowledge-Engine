@@ -10,6 +10,7 @@ from app.celery_worker import ingest_file_task
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from app.contact import router as contact_router
 import os
 from dotenv import load_dotenv
 from app.vector_store import search, get_collection
@@ -153,6 +154,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(contact_router)
 
 # OAuth Setup
 oauth = OAuth()
