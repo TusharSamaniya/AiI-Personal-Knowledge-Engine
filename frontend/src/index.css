@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+/* Tailwind v4 no longer gives buttons a pointer cursor - restore it app-wide.
+   In @layer base so any utility class (e.g. cursor-default) or inline style still wins. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  select,
+  label[for],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="file"] {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
 /* Custom global styles */
 * {
   box-sizing: border-box;

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
 // Dashboard auth (reads/writes "token" in localStorage)
 import { AuthProvider as DashAuthProvider } from './context/AuthContext';
@@ -13,6 +13,7 @@ import AuthCallback from './pages/AuthCallback';
 import Login        from './pages/Login';
 import Register     from './pages/Register';
 import ProtectedRoute from './components/ProtectedRoute';
+import DashboardLayout from './components/DashboardLayout';
 import LandingApp   from './landing/components/LandingApp';
 
 function App() {
@@ -50,7 +51,9 @@ function App() {
             path="/dashboard"
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <DashboardLayout>
+                  <Dashboard />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />
@@ -58,7 +61,9 @@ function App() {
             path="/analytics"
             element={
               <ProtectedRoute>
-                <Analytics />
+                <DashboardLayout>
+                  <Analytics />
+                </DashboardLayout>
               </ProtectedRoute>
             }
           />

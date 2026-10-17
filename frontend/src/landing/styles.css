@@ -57,7 +57,8 @@ html { scroll-behavior: smooth; }
   --ink: #f5f3ee;
   --ink-soft: rgba(245, 243, 238, 0.78);
 }
-.navbar:not(.navbar--solid) .navbar__links a:hover { color: #fff; }
+.navbar:not(.navbar--solid) .navbar__links a:hover,
+.navbar:not(.navbar--solid) .navbar__work-link:hover { color: #fff; }
 .navbar--solid { background: rgba(255,255,255,.85); box-shadow: 0 1px 0 rgba(11,13,18,.08); backdrop-filter: blur(14px); }
 .navbar__inner {
   max-width: 1280px; margin: 0 auto; padding: 18px 32px;
@@ -68,6 +69,10 @@ html { scroll-behavior: smooth; }
 .navbar__links { display: flex; gap: 32px; font-size: 15px; }
 .navbar__links a { color: var(--ink-soft); transition: color .2s; }
 .navbar__links a:hover { color: #000; }
+/* "Work" is a <button>; make it look and behave like the other nav links */
+.navbar__links a, .navbar__work-link { cursor: pointer; }
+.navbar__work-link { background: none; border: 0; padding: 0; font: inherit; color: var(--ink-soft); transition: color .2s; }
+.navbar__work-link:hover { color: #000; }
 .navbar__auth { display: flex; align-items: center; gap: 14px; }
 .navbar__welcome { font-size: 15px; color: var(--ink-soft); }
 .navbar__toggle { display: none; }
@@ -669,7 +674,8 @@ html { scroll-behavior: smooth; }
   box-shadow: none;
   backdrop-filter: blur(14px);
 }
-.navbar.navbar--sol .navbar__links a:hover { color: #0b0d12; }
+.navbar.navbar--sol .navbar__links a:hover,
+.navbar.navbar--sol .navbar__work-link:hover { color: #0b0d12; }
 .navbar.navbar--sol .navbar__links a.is-active { color: #4f46e5; }
 .navbar.navbar--sol .btn--light { background: #0b0d12; color: #fff; }
 .navbar.navbar--sol .btn--light:hover { background: #262a35; }
