@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   redis:
     image: redis:7
@@ -58,8 +59,16 @@ services:
       - "5173:5173"
     depends_on:
       - backend
-    env_file:
-      - ./frontend/.env
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+    # ── KEY FIX ──────────────────────────────────────────────────────────
+    # Do NOT mount ./frontend:/app here.
+    # That volume would overwrite the node_modules that npm install built
+    # inside the container, making all packages (framer-motion, gsap, etc.)
+    # disappear at runtime — which is why clicking buttons did nothing.
+    #
+    # VITE_* vars must be passed as `environment:` (not just env_file)
+    # because Vite reads them at dev-server startup from the process env,
+    # not from the .env file on disk inside the container.
+    # ─────────────────────────────────────────────────────────────────────
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
