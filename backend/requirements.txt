@@ -17,7 +17,8 @@ pdfplumber
 python-docx
 langchain-text-splitters
 openai
-chromadb==0.5.20
+pinecone
 youtube-transcript-api
 beautifulsoup4
 groq
+boto3

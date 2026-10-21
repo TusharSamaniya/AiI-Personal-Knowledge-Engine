@@ -1,6 +1,5 @@
 import os
-import chromadb
-from chromadb.config import Settings
+from pinecone import Pinecone
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 
@@ -13,16 +12,9 @@ azure_client = AzureOpenAI(
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
 )
 
-# HTTP client pointing to the chromadb service
-CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
-
-def get_chroma_client():
-    return chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-
-def get_collection(project_id: int):
-    client = get_chroma_client()
-    return client.get_or_create_collection(name=f"project_{project_id}")
+# Pinecone Client
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index("knowledge-engine")
 
 def embed_and_store(project_id: int, chunk_id: int, text: str, metadata: dict = None):
     response = azure_client.embeddings.create(
@@ -31,20 +23,20 @@ def embed_and_store(project_id: int, chunk_id: int, text: str, metadata: dict = 
     )
     embedding = response.data[0].embedding
     
-    collection = get_collection(project_id)
-    vector_id = f"chunk_{chunk_id}"
-    
     meta = metadata or {}
-    meta = {k: v for k, v in meta.items() if v is not None}
+    meta["text"] = text 
     
-    collection.add(
-        ids=[vector_id],
-        embeddings=[embedding],
-        documents=[text],
-        metadatas=[meta] if meta else None
+    index.upsert(
+        vectors=[{
+            "id": f"chunk_{chunk_id}",
+            "values": embedding,
+            "metadata": meta
+        }],
+        namespace=f"project_{project_id}"
     )
-    return vector_id
+    return f"chunk_{chunk_id}"
 
+# Added max_distance back to the arguments to fix the Chat 500 error
 def search(project_id: int, query: str, top_k: int = 5, max_distance: float = 2.0):
     response = azure_client.embeddings.create(
         input=query,
@@ -52,33 +44,61 @@ def search(project_id: int, query: str, top_k: int = 5, max_distance: float = 2.
     )
     query_embedding = response.data[0].embedding
     
-    collection = get_collection(project_id)
-    
-    if collection.count() == 0:
-        return []
-    
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(top_k, collection.count())
+    results = index.query(
+        vector=query_embedding,
+        top_k=top_k,
+        include_metadata=True,
+        namespace=f"project_{project_id}"
     )
     
-    documents = results["documents"][0]
-    distances = results["distances"][0]
-    ids = results["ids"][0]
-    metadatas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(documents)
-    
-    print("[SEARCH] Collection count:", collection.count())
-    print("[SEARCH] Distances:", distances)
-    print("[SEARCH] IDs:", ids)
-    
     filtered = []
-    for doc, dist, vid, meta in zip(documents, distances, ids, metadatas):
-        if dist <= max_distance:
-            filtered.append({
-                "text": doc,
-                "vector_id": vid,
-                "distance": round(dist, 3),
-                "file_id": meta.get("file_id") if meta else None
-            })
-    
+    for match in results.matches:
+        meta = match.metadata
+        filtered.append({
+            "text": meta.get("text", ""),
+            "file_id": meta.get("file_id"),
+            "vector_id": match.id,
+            "distance": match.score 
+        })
     return filtered
+
+# Adapter for main.py to use .count() and .get()
+class PineconeCollectionAdapter:
+    def __init__(self, project_id):
+        self.namespace = f"project_{project_id}"
+        
+    def count(self):
+        try:
+            stats = index.describe_index_stats()
+            if "namespaces" in stats and self.namespace in stats["namespaces"]:
+                return stats["namespaces"][self.namespace]["vector_count"]
+            return 0
+        except Exception:
+            return 0
+
+    def get(self):
+        try:
+            ids = []
+            for ids_page in index.list(namespace=self.namespace):
+                for item in ids_page:
+                    ids.append(item.id if hasattr(item, 'id') else item)
+                if len(ids) >= 100: 
+                    break
+            
+            if not ids:
+                return {"documents": []}
+
+            fetch_response = index.fetch(ids=ids[:100], namespace=self.namespace)
+            
+            documents = []
+            for vec in fetch_response.vectors.values():
+                if vec.metadata and "text" in vec.metadata:
+                    documents.append(vec.metadata["text"])
+                    
+            return {"documents": documents}
+        except Exception as e:
+            print(f"[PINECONE] Failed to get documents: {e}")
+            return {"documents": []}
+
+def get_collection(project_id: int):
+    return PineconeCollectionAdapter(project_id)
