@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api/axios';
+import { API_BASE } from '../api/config';
 
-const API_BASE = 'http://localhost:8000';
 
 export default function JiraIntegration() {
   const [connected, setConnected] = useState(false);

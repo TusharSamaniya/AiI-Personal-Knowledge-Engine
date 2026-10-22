@@ -1,5 +1,7 @@
+import os
 import logging
 from celery import Celery
+from dotenv import load_dotenv
 from app.database import SessionLocal
 from app.models import File, Chunk
 from app.parser import extract_text
@@ -12,11 +14,22 @@ from app.extractors.web_extractor import extract_web_text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+load_dotenv()
+
+# Read the Upstash connection string from .env
+REDIS_URL = os.getenv("REDIS_URL")
+
+# Initialize Celery
 celery_app = Celery(
     "worker",
-    broker="redis://redis:6379/0",
-    backend="redis://redis:6379/0"
+    broker=REDIS_URL,
+    backend=REDIS_URL
 )
+
+# Upstash requires SSL (rediss://). We must configure Celery to accept it.
+if REDIS_URL and REDIS_URL.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": "required"}
+    celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": "required"}
 
 def get_text_from_source(file_record) -> str:
     """Unified text extraction based on source type"""
@@ -25,6 +38,9 @@ def get_text_from_source(file_record) -> str:
     elif file_record.source_type == "web":
         return extract_web_text(file_record.name)
     else:
+        # Note: Since we are now using Backblaze for storage, 
+        # the parser will need the local file to extract text. 
+        # We will handle this properly later.
         return extract_text(f"uploads/{file_record.name}", file_record.file_type)
 
 @celery_app.task(bind=True, max_retries=3)
@@ -77,10 +93,9 @@ def ingest_file_task(self, file_id: int):
         
         if file_record:
             file_record.status = "failed"
-            file_record.error_message = error_msg[:1000]  # Truncate long errors
+            file_record.error_message = error_msg[:1000]
             db.commit()
         
-        # Retry for temporary errors
         if self.request.retries < self.max_retries:
             logger.info(f"[INGEST] Retrying task {file_id}... (attempt {self.request.retries + 1})")
             raise self.retry(exc=e, countdown=10)
