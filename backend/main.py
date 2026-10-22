@@ -145,15 +145,29 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key="super-secret-key-change-me")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me")
+)
+
+
+frontend_url = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+).rstrip("/")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        frontend_url,
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.include_router(contact_router)
 
@@ -196,7 +210,12 @@ def login(email: str, password: str, db: Session = Depends(get_db)):
 
 @app.get("/auth/google")
 async def auth_google(request: Request):
-    redirect_uri = "http://localhost:8000/auth/google/callback"
+    backend_url = os.getenv(
+    "BACKEND_URL",
+    "http://localhost:8000"
+    ).rstrip("/")
+
+    redirect_uri = f"{backend_url}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -763,9 +782,14 @@ async def drive_connect(token: str, request: Request, db: Session = Depends(get_
     
     # 2. Store the user ID in the browser session
     request.session["drive_user_id"] = user.id
-    
-    # 3. Redirect to Google with the Drive scope
-    redirect_uri = "http://localhost:8000/integrations/drive/callback"
+
+    backend_url = os.getenv(
+    "BACKEND_URL",
+    "http://localhost:8000"
+    ).rstrip("/")
+
+    redirect_uri = f"{backend_url}/integrations/drive/callback"
+
     return await oauth.google.authorize_redirect(
         request,
         redirect_uri,
@@ -817,7 +841,9 @@ async def drive_callback(request: Request, db: Session = Depends(get_db)):
     db.commit()
     
     # 4. Redirect the browser back to the frontend
-    return RedirectResponse(url="http://localhost:5173/dashboard?drive=connected")
+    return RedirectResponse(
+    url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/dashboard?drive=connected"
+    )
 
 @app.get("/integrations/drive/files")
 async def drive_files(
@@ -969,7 +995,9 @@ async def notion_callback(code: str, state: str, db: Session = Depends(get_db)):
     db.commit()
     
     # 4. Redirect back to the frontend
-    return RedirectResponse(url="http://localhost:5173/dashboard?notion=connected")
+    return RedirectResponse(
+    url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/dashboard?notion=connected"
+    )
 
 @app.get("/integrations/notion/pages")
 async def notion_pages(
@@ -1133,7 +1161,9 @@ async def slack_callback(code: str, state: str, db: Session = Depends(get_db)):
     
     db.commit()
     
-    return RedirectResponse(url="http://localhost:5173/dashboard?slack=connected")
+    return RedirectResponse(
+    url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/dashboard?slack=connected"       
+    )
 
 @app.get("/integrations/slack/channels")
 async def slack_channels(
@@ -1337,7 +1367,9 @@ async def jira_callback(code: str, state: str, db: Session = Depends(get_db)):
     
     db.commit()
     
-    return RedirectResponse(url="http://localhost:5173/dashboard?jira=connected")
+    return RedirectResponse(
+    url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/dashboard?jira=connected"
+    )
 
 @app.get("/integrations/jira/sites")
 async def jira_sites(

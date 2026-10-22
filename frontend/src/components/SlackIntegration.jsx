@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api/axios';
-
-const API_BASE = 'http://localhost:8000';
+import { API_BASE } from '../api/config';
 
 export default function SlackIntegration() {
   const [connected, setConnected] = useState(false);
