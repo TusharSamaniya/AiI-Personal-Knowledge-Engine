@@ -572,7 +572,7 @@ def upload_file(
     # Verify the user has access to this project (owner or member)
     project = get_accessible_project(current_user.active_project_id, current_user, db)
     
-    saved_path = storage.save_file(file)
+        saved_path = storage.save_file(file, current_user.active_project_id)
     file_type = file.filename.split('.')[-1].lower()
     
     new_file = FileModel(

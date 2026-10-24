@@ -9,6 +9,8 @@ from app.chunker import chunk_text
 from app.vector_store import embed_and_store
 from app.extractors.youtube_extractor import extract_youtube_text
 from app.extractors.web_extractor import extract_web_text
+from app.storage import LocalStorage
+storage = LocalStorage()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -38,10 +40,11 @@ def get_text_from_source(file_record) -> str:
     elif file_record.source_type == "web":
         return extract_web_text(file_record.name)
     else:
-        # Note: Since we are now using Backblaze for storage, 
-        # the parser will need the local file to extract text. 
-        # We will handle this properly later.
-        return extract_text(f"uploads/{file_record.name}", file_record.file_type)
+        tmp_path = storage.download_to_temp(file_record.project_id, file_record.name)
+        try:
+            return extract_text(tmp_path, file_record.file_type)
+        finally:
+            os.remove(tmp_path)
 
 @celery_app.task(bind=True, max_retries=3)
 def ingest_file_task(self, file_id: int):
