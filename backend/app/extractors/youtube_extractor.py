@@ -66,7 +66,7 @@ def _transcript_via_api(video_id: str) -> str:
 def _transcript_via_gemini(video_id: str) -> str:
     """Ask Gemini to read the public YouTube video and return its spoken content."""
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-3.8-flash")
 
     response = client.models.generate_content(
         model=model,
