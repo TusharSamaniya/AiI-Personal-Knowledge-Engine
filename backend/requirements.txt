@@ -16,7 +16,7 @@ python-jose[cryptography]
 pdfplumber
 python-docx
 langchain-text-splitters
-openai
+google-genai
 pinecone
 youtube-transcript-api
 beautifulsoup4
