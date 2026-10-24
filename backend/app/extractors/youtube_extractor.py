@@ -1,5 +1,8 @@
 import re
 from urllib.parse import urlparse, parse_qs
+import os
+from google import genai
+from google.genai import types
 
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -49,21 +52,56 @@ def extract_video_id(url: str) -> str:
     raise ValueError("Invalid YouTube URL. Could not find video ID.")
 
 
+def _transcript_via_api(video_id: str) -> str:
+    ytt_api = YouTubeTranscriptApi()
+    transcript_list = ytt_api.list(video_id)
+    try:
+        transcript = transcript_list.find_transcript(['en'])
+    except Exception:
+        transcript = next(iter(transcript_list))
+    fetched = transcript.fetch()
+    return " ".join(snippet.text for snippet in fetched)
+
+
+def _transcript_via_gemini(video_id: str) -> str:
+    """Ask Gemini to read the public YouTube video and return its spoken content."""
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-2.5-flash")
+
+    response = client.models.generate_content(
+        model=model,
+        contents=types.Content(parts=[
+            types.Part(file_data=types.FileData(
+                file_uri=f"https://www.youtube.com/watch?v={video_id}"
+            )),
+            types.Part(text=(
+                "Write out everything that is said in this video as plain text, "
+                "in the language spoken. If there is little or no speech, describe "
+                "in detail what the video shows and any on-screen text. "
+                "Output only the text, with no introduction or commentary."
+            )),
+        ]),
+        config=types.GenerateContentConfig(
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW
+        ),
+    )
+    text = (response.text or "").strip()
+    if not text:
+        raise ValueError("Gemini returned no content for this video.")
+    return text
+
+
 def extract_youtube_text(url: str) -> str:
     video_id = extract_video_id(url)
 
+    # 1) Try the transcript API (works when YouTube doesn't block the server's IP)
     try:
-        ytt_api = YouTubeTranscriptApi()
-        transcript_list = ytt_api.list(video_id)
+        return _transcript_via_api(video_id)
+    except Exception:
+        pass
 
-        # Try to find English first, then fall back to any available transcript
-        try:
-            transcript = transcript_list.find_transcript(['en'])
-        except Exception:
-            # English not available, get the first available one
-            transcript = next(iter(transcript_list))
-
-        fetched = transcript.fetch()
-        return " ".join(snippet.text for snippet in fetched)
+    # 2) Fall back to Gemini, which reads the video on Google's side
+    try:
+        return _transcript_via_gemini(video_id)
     except Exception as e:
-        raise ValueError(f"Could not fetch transcript: {str(e)}")
+        raise ValueError(f"Could not read this YouTube video: {e}")
