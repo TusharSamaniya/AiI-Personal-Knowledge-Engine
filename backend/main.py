@@ -568,13 +568,13 @@ def upload_file(
 ):
     if not current_user.active_project_id:
         raise HTTPException(status_code=400, detail="No active project. Please switch to a project first.")
-    
+
     # Verify the user has access to this project (owner or member)
     project = get_accessible_project(current_user.active_project_id, current_user, db)
-    
-        saved_path = storage.save_file(file, current_user.active_project_id)
+
+    saved_path = storage.save_file(file, current_user.active_project_id)
     file_type = file.filename.split('.')[-1].lower()
-    
+
     new_file = FileModel(
         project_id=current_user.active_project_id,
         name=file.filename,
@@ -584,9 +584,9 @@ def upload_file(
     db.add(new_file)
     db.commit()
     db.refresh(new_file)
-    
+
     ingest_file_task.delay(new_file.id)
-    
+
     return {
         "message": "File uploaded and processing started.",
         "file_id": new_file.id,
