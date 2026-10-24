@@ -1,28 +1,11 @@
-"""
-Contact-form endpoint.
-
-POST /contact   { "email": "...", "subject": "...", "message": "..." }
-
-Sends the visitor's message to YOUR inbox over SMTP. The visitor's address is
-set as Reply-To, so pressing "Reply" in Gmail answers them directly.
-
-Required .env settings (backend/.env):
-    SMTP_USER=you@gmail.com            # the Gmail account that SENDS the mail
-    SMTP_PASSWORD=abcdefghijklmnop     # Gmail *App Password* (NOT your login password)
-Optional:
-    CONTACT_TO_EMAIL=you@gmail.com     # where messages arrive (defaults to SMTP_USER)
-    SMTP_HOST=smtp.gmail.com           # default
-    SMTP_PORT=465                      # 465 = SSL (default), 587 = STARTTLS
-"""
 import logging
 import os
 import re
-import smtplib
-import ssl
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
-from email.message import EmailMessage
+import httpx
+
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -53,24 +36,16 @@ def _check_rate_limit(ip: str) -> None:
         raise HTTPException(429, "Too many messages. Please try again later.")
     q.append(now)
 
-
 def _send_email(visitor_email: str, subject: str, message: str, ip: str) -> None:
-    user = os.getenv("SMTP_USER", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()  # app passwords are shown with spaces
-    host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-    port = int(os.getenv("SMTP_PORT", "465"))
-    to_addr = os.getenv("CONTACT_TO_EMAIL", "").strip() or user
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    to_addr = os.getenv("CONTACT_TO_EMAIL", "").strip()
+    from_addr = os.getenv("CONTACT_FROM_EMAIL", "Knowledge Engine <onboarding@resend.dev>").strip()
 
-    if not user or not password:
-        logger.error("Contact form: SMTP_USER / SMTP_PASSWORD are not set in backend/.env")
+    if not api_key or not to_addr:
+        logger.error("Contact form: RESEND_API_KEY / CONTACT_TO_EMAIL are not set")
         raise HTTPException(503, "The contact service is not configured yet.")
 
-    msg = EmailMessage()
-    msg["From"] = f"Knowledge Engine Contact <{user}>"   # Gmail only allows your own address here
-    msg["To"] = to_addr
-    msg["Reply-To"] = visitor_email
-    msg["Subject"] = f"[Knowledge Engine] {subject}"
-    msg.set_content(
+    text = (
         f"New message from your website contact form\n"
         f"{'-' * 44}\n"
         f"From:    {visitor_email}\n"
@@ -82,23 +57,25 @@ def _send_email(visitor_email: str, subject: str, message: str, ip: str) -> None
     )
 
     try:
-        context = ssl.create_default_context()
-        if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=15, context=context) as server:
-                server.login(user, password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(host, port, timeout=15) as server:
-                server.starttls(context=context)
-                server.login(user, password)
-                server.send_message(msg)
-    except smtplib.SMTPAuthenticationError:
-        logger.error("Contact form: SMTP login failed. Use a Gmail App Password, not your normal password.")
-        raise HTTPException(502, "The message could not be sent right now. Please try again later.")
-    except (smtplib.SMTPException, OSError) as exc:
-        logger.error("Contact form: could not send email: %s", exc)
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "from": from_addr,
+                "to": [to_addr],
+                "reply_to": visitor_email,
+                "subject": f"[Knowledge Engine] {subject}",
+                "text": text,
+            },
+            timeout=15,
+        )
+    except httpx.HTTPError as exc:
+        logger.error("Contact form: could not reach Resend: %s", exc)
         raise HTTPException(502, "The message could not be sent right now. Please try again later.")
 
+    if resp.status_code >= 400:
+        logger.error("Contact form: Resend rejected the email (%s): %s", resp.status_code, resp.text)
+        raise HTTPException(502, "The message could not be sent right now. Please try again later.")
 
 @router.post("/contact")
 def send_contact_message(payload: ContactIn, request: Request):
